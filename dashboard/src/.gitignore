@@ -1,0 +1,16 @@
+package-lock.json
+# Dependencies
+**/node_modules/
+
+# Build folders
+**/build/
+
+# Environment files
+**/.env
+**/.env.*
+
+# Logs
+**/*.log
+
+# Cache
+**/.cache/
