@@ -6,7 +6,17 @@ These pages are intentionally written for people who do not know stock-market ja
 Show the value of the user's **current shares**, their historical risk (volatility, beta and drawdown), a hypothetical 5/10/20% market-fall scenario, and a **5- or 20-trading-session value illustration** based on recent historical average returns and volatility. This illustration is **not** an ML prediction, guaranteed outcome, statistical confidence interval or forecast of total account equity. It covers stock holdings only, not uninvested cash.
 
 ## 2. Explore a stock
-Select one of the 20 supported NSE companies. See historical closing prices, an experimental **next-session direction probability** (Logistic Regression, scikit-learn), a price illustration combining its direction probability with historical average UP/DOWN moves, and a band based on one recent daily standard deviation. A classification model **cannot** independently forecast a precise market price. If historical accuracy failed to beat simple guesses, do not trust the estimate. The illustration is not an investment target, confidence interval or advice.
+Select one of the supported companies. The chart displays **past historical closing prices**, not ML predictions.
+
+A **Prediction model** selector displays next-session UP estimates from two *separately trained* classifiers:
+- Logistic Regression (the original direction model)
+- Random Forest (new next-session probability from a model fit on labelled history)
+
+Alongside each estimate, display its own five-fold chronological walk-forward historical accuracy versus the best simple-guess baseline. If its historical advantage does not exceed the rough sampling-noise screen, show an explicit "No convincing advantage" message. Passing the screen **does not** mean probabilities are calibrated, a reliable live forecasting edge is proved, or trading on its signals would be profitable. Both model choices use the same historical stock data; changing the choice switches the actual displayed estimate without executing a trade.
+
+**No exact next-session price is shown.** The previous probability-weighted price illustration was a custom, unvalidated calculation and was removed from the beginner UI. The backend still returns legacy `priceOutlook` fields for compatibility; they should not be presented as independently validated price predictions.
+
+CNN remains a **separate historical comparison experiment**, not a selectable live model, because it has not been fitted for a comparable latest-session forecast.
 
 ## 3. Test a trading idea
 20-day versus 50-day simple moving-average backtest, with assumed 0.1% per-side costs, compared to a buy-once-and-hold approach. It examines the past, not the future, and doesn't make account trades.

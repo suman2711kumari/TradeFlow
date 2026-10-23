@@ -3,7 +3,7 @@
 **TradeFlow is a MERN paper-trading website with Python analysis and a read-only Gemini assistant.**
 It uses simulated money and external market prices. It is **not** a real brokerage or investment-advice product.
 
-This branch intentionally keeps the features named in the resume and simplifies the dashboard's **Insights** page to three sections.
+This branch intentionally keeps the features named in the resume and organises the dashboard's **Insights** page into four beginner-friendly sections.
 
 ## Features
 
@@ -81,8 +81,8 @@ To run the optional CNN experiment, install `pip install -r requirements-cnn.txt
 
 | Where | Why |
 | --- | --- |
-| `dashboard/src/components/ResearchLab.js` | Three clearly named analysis tabs |
-| `dashboard/src/components/research/` | Simple React pages for risk, backtesting and models |
+| `dashboard/src/components/ResearchLab.js` | Four beginner-friendly analysis sections |
+| `dashboard/src/components/research/` | Plain-language portfolio, stock direction, backtesting and model evidence pages |
 | `backend/services/orderService.js` | Server-priced order and conditional cash check |
 | `backend/services/marketData.js` | Yahoo Finance fetching and caching |
 | `backend/services/portfolioService.js` | Connects user's holdings with Python risk calculation |
@@ -93,3 +93,7 @@ To run the optional CNN experiment, install `pip install -r requirements-cnn.txt
 | `ml-service/app/cnn.py` | Optional 1D CNN comparison |
 
 Read **INTERVIEW_GUIDE.md** before presenting the project. The main branch has not been edited.
+
+## Transparent stock direction checks
+
+The Stock Outlook page lets a user select Logistic Regression or Random Forest and shows that classifier's **actual next-session UP probability**, its own historical five-fold walk-forward accuracy and the best naive baseline. Probabilities are uncalibrated and should not be used as trading advice. A weak score displays a clear warning, not a forecast price. The price chart always shows **past** market prices. CNN remains an optional **historical** comparison using a separate chronological split, not a live-choice predictor.
