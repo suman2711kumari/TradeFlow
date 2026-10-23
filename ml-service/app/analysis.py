@@ -160,7 +160,10 @@ def run_walk_forward(usable: pd.DataFrame, n_splits: int = 5, gap: int = 1) -> d
 def backtest_signal(meta: pd.DataFrame, threshold: float = SIGNAL_THRESHOLD, cost_bps: float = DEFAULT_COST_BPS) -> dict[str, Any]:
     """Long-only strategy on out-of-sample predictions: hold when P(up) >= threshold, otherwise cash."""
     returns = meta["next_return"].to_numpy(dtype=float)
-    position = (meta["lr_prob"].to_numpy(dtype=float) >= threshold).astype(float)
+    # A signal observed at the close of day t is used only after a full session delay.
+    # This avoids assuming that we can trade at the same close used to create the features.
+    signals = (meta["lr_prob"].to_numpy(dtype=float) >= threshold).astype(float)
+    position = np.concatenate([[0.0], signals[:-1]])
     turnover = np.abs(np.diff(np.concatenate([[0.0], position, [0.0]])))  # includes the final exit
     cost = cost_bps / 10_000
     gross = position * returns
@@ -178,7 +181,7 @@ def backtest_signal(meta: pd.DataFrame, threshold: float = SIGNAL_THRESHOLD, cos
         "testSessions": int(len(meta)),
         "rule": (
             f"Out-of-sample walk-forward predictions only. Long when Logistic Regression P(up) >= {int(threshold * 100)}%, otherwise cash. "
-            f"Includes {cost_bps:g} bps per side for costs and slippage. Assumes execution at the same close the signal is computed from."
+            f"Includes {cost_bps:g} bps per side for costs and slippage. Delays the signal by one session; simplified close-to-close fills (no market impact)."
         ),
     }
 

@@ -124,7 +124,7 @@ async function executeOrder(input, deps = {}) {
     if (err instanceof ServiceError) throw err;
     if (err?.code === 11000) throw new ServiceError(409, "A concurrent order conflicted with this one. Please retry.");
     console.error("Order processing failed:", err.message);
-    throw new ServiceError(500, "Order could not be completed and no changes were kept. Please retry.");
+    throw new ServiceError(500, "Order processing failed. Refresh your funds and order history before retrying.");
   }
 
   if (mode === "SELL") { // best-effort tidy-up of fully sold holdings; readers also ignore qty <= 0
