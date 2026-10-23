@@ -240,6 +240,21 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
         "Recent realized volatility is elevated; position sizing deserves extra care." if ann_vol >= 0.35 else "Recent realized volatility is comparatively moderate.",
         f"Walk-forward validation: {wf['nSplits']} expanding-window folds, {wf['pooledSessions']} out-of-sample sessions, no shuffling and a {wf['gapSessions']}-session gap between training and test data.",
     ]
+    # A beginner-friendly, model-informed next-session *illustration*, not a
+    # validated numerical price forecast. The classifier predicts direction;
+    # the possible size of a move is taken from the last 90 daily returns.
+    # We show the recent one-standard-deviation band, not a confidence interval.
+    recent = close.pct_change().dropna().tail(90)
+    up_days = recent[recent > 0]
+    other_days = recent[recent <= 0]
+    expected_move = (
+        probability_up * float(up_days.mean() if len(up_days) else 0.0)
+        + (1.0 - probability_up) * float(other_days.mean() if len(other_days) else 0.0)
+    )
+    daily_spread = float(recent.std(ddof=0)) if len(recent) > 1 else 0.0
+    estimated_close = max(0.0, latest_close * (1.0 + expected_move))
+    lower_close = max(0.0, latest_close * (1.0 + expected_move - daily_spread))
+    upper_close = max(lower_close, latest_close * (1.0 + expected_move + daily_spread))
     chart_frame = frame.tail(120)
     return {
         "symbol": payload.symbol.upper(),
@@ -263,6 +278,18 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
             "edgeAssessment": assessment,
             "thresholdPct": int(SIGNAL_THRESHOLD * 100),
             "disclaimer": "Experimental estimate, not investment advice. Probabilities are not calibrated and short-term returns are very noisy.",
+        },
+        "priceOutlook": {
+            "horizon": "Next trading session",
+            "lastHistoricalClose": money(latest_close),
+            "lastHistoricalDate": frame["date"].iloc[-1].strftime("%Y-%m-%d"),
+            "illustrativePrice": money(estimated_close),
+            "lowerIllustration": money(lower_close),
+            "upperIllustration": money(upper_close),
+            "historicalDailyMovePct": pct(daily_spread),
+            "expectedMovePct": pct(expected_move),
+            "method": "Logistic Regression next-session UP probability combined with average size of recent UP and non-UP daily moves (last 90 sessions).",
+            "warning": "Illustration only. The direction model is not calibrated and may not beat a basic guess; this is not a reliable future price forecast. The band is one recent daily standard deviation, not a confidence interval. Based on the last available historical close, not a guaranteed executable quote."
         },
         "walkForward": wf,
         "modelComparison": wf["summary"],

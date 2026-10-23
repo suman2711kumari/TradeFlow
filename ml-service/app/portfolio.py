@@ -257,6 +257,29 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
         },
     }
 
+    # A beginner-friendly portfolio future illustration. Current holdings are
+    # held at fixed weights; cash and future trading decisions are not forecast.
+    # The central path extends the *historical mean* daily return and the band
+    # uses one daily standard deviation multiplied by sqrt(horizon). This band
+    # has no probability guarantee and is NOT an ML prediction.
+    daily_mean = float(port_returns.mean())
+    daily_std = float(port_returns.std(ddof=0))
+    outlook = []
+    for days in (5, 20):
+        scenario_return = (1.0 + daily_mean) ** days - 1.0
+        move_band = daily_std * np.sqrt(days)
+        scenario_value = total_value + covered_value * scenario_return
+        lower_value = max(0.0, scenario_value - covered_value * move_band)
+        upper_value = scenario_value + covered_value * move_band
+        outlook.append({
+            "tradingDays": days,
+            "illustrativeValue": _r2(scenario_value),
+            "lowerIllustration": _r2(lower_value),
+            "upperIllustration": _r2(upper_value),
+            "possibleChange": _r2(scenario_value - total_value),
+            "historyCoveragePct": _r2(coverage * 100),
+        })
+
     return {
         "asOf": returns.index[-1].strftime("%Y-%m-%d"),
         "window": {
@@ -292,6 +315,12 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
         "correlation": {"labels": covered, "matrix": [[round(float(v), 2) for v in row] for row in corr.to_numpy()], "highestPairs": top_pairs},
         "flags": flags,
         "stress": stress,
+        "outlook": {
+            "currentHoldingsValue": _r2(total_value),
+            "periods": outlook,
+            "method": "For illustration only: extend the average daily portfolio return from the available past-year overlap for 5/20 trading sessions; use historical volatility times sqrt(days) for an indicative movement band. Keep current stock weights fixed and leave uncovered holdings unchanged.",
+            "warning": "Not a reliable forecast or probability interval. Historical averages can reverse suddenly; cash, future deposits, new trades, brokerage and market impact are not included. May cover less than the full portfolio if data is missing."
+        },
         "warnings": warnings,
         "methodology": (
             "Today's holdings and weights are replayed through the last year of actual daily closing prices (Yahoo Finance). "
