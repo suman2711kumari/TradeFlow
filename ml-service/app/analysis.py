@@ -221,6 +221,11 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
         raise ValueError("Unable to fit a final model from the available historical observations.")
     final_lr = make_logistic().fit(labelled[FEATURES], labelled["target"].astype(int).to_numpy())
     probability_up = float(prob_up(final_lr, latest_rows.iloc[[-1]][FEATURES])[0])
+    # A second independently fitted model gives a genuine alternate
+    # next-session direction estimate. CNN is evaluation-only and is not a
+    # selectable live predictor.
+    final_rf = make_forest().fit(labelled[FEATURES], labelled["target"].astype(int).to_numpy())
+    probability_up_rf = float(prob_up(final_rf, latest_rows.iloc[[-1]][FEATURES])[0])
 
     close = frame["close"].astype(float)
     latest_close, previous_close = float(close.iloc[-1]), float(close.iloc[-2])
@@ -255,6 +260,32 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
     estimated_close = max(0.0, latest_close * (1.0 + expected_move))
     lower_close = max(0.0, latest_close * (1.0 + expected_move - daily_spread))
     upper_close = max(lower_close, latest_close * (1.0 + expected_move + daily_spread))
+    # Compare EACH selectable model to the best trivial guess over identical
+    # walk-forward test sessions. This is a cautious screening rule, NOT a
+    # statistical proof or a probability-calibration test.
+    model_outlooks = {}
+    for key, model_name, model_acc, model_probability in (
+        ("logisticRegression", "Logistic Regression", lr_acc, probability_up),
+        ("randomForest", "Random Forest", rf_acc, probability_up_rf),
+    ):
+        accuracy_gap = model_acc - best_baseline
+        passes_screen = accuracy_gap > margin
+        model_outlooks[key] = {
+            "model": model_name,
+            "probabilityUpPct": pct(model_probability),
+            "walkForwardAccuracyPct": model_acc,
+            "baselineAccuracyPct": best_baseline,
+            "accuracyAdvantagePctPoints": round(accuracy_gap, 2),
+            "screeningMarginPctPoints": round(margin, 2),
+            "hasDemonstratedEdge": bool(passes_screen),
+            "message": (
+                "This model exceeded the basic accuracy screening threshold in this historical test, "
+                "but its future predictions are still unverified and its probabilities are not calibrated."
+                if passes_screen else
+                "This model has not clearly beaten a simple historical guess; "
+                "its next-session probability is experimental, not a reliable trading signal."
+            ),
+        }
     chart_frame = frame.tail(120)
     return {
         "symbol": payload.symbol.upper(),
@@ -292,6 +323,7 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
             "warning": "Illustration only. The direction model is not calibrated and may not beat a basic guess; this is not a reliable future price forecast. The band is one recent daily standard deviation, not a confidence interval. Based on the last available historical close, not a guaranteed executable quote."
         },
         "walkForward": wf,
+        "modelOutlooks": model_outlooks,
         "modelComparison": wf["summary"],
         "backtest": backtest,
         "chart": [{"date": row.date.strftime("%Y-%m-%d"), "close": money(row.close)} for row in chart_frame.itertuples(index=False)],
