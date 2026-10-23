@@ -6,7 +6,7 @@ export default function PortfolioRisk(){
  useEffect(()=>{load(5);},[]);
  if(error?.status===422)return <section className="friendly-card friendly-empty"><h3>Buy your first paper stock</h3><p>Once you own a share, we can use its past prices to explain your holdings and possible market-drop scenarios.</p></section>;
  const s=data?.summary,st=data?.stress,p=data?.outlook?.periods.find(p=>p.tradingDays===days);
- const haveBeta=st&&st.betaAdjusted.betaAssumedForOneOf.length===0;
+ const haveBeta=Boolean(st?.betaAdjusted?.available);
  const change=st&&(haveBeta?st.betaAdjusted.estimatedValueChange:st.uniform.estimatedValueChange);
  return <>
  <section className="friendly-card"><div className="friendly-heading"><h3>How is my portfolio doing?</h3><p>Your stocks' current estimated value, followed by a look at how they behaved in the past year.</p></div>
@@ -18,6 +18,7 @@ export default function PortfolioRisk(){
  <section className="friendly-card"><div className="friendly-heading"><h3>Your investments today</h3></div>
  <div className="friendly-stat-grid"><StatCard label="Value of the stocks you hold" value={inr(s.marketValue)}/><StatCard label="Profit/loss on your current shares" value={inr(s.unrealizedPnl)} tone={s.unrealizedPnl>=0?"up":"down"}/><StatCard label="Biggest historical drop" value={Math.abs(s.maxDrawdownPct).toFixed(1)+"%"} tip={GLOSSARY.drawdown}/></div>
  <p className="friendly-note">Volatility: <b>{s.annualizedVolatilityPct.toFixed(1)}%</b> (how widely your portfolio's past returns moved). Beta against NIFTY 50: <b>{s.beta??"unavailable"}</b> (how its returns have moved relative to the market). These numbers describe the past, not your future profit.</p>
+ {s.beta == null && <div className="rule-explainer"><b>Why is beta unavailable?</b> NIFTY 50 historical market data is missing or did not overlap enough with your stocks' data. We do not replace an unknown beta with 1. The market-fall test will use the simpler equal-fall assumption. Check the data warnings below.</div>}
  </section>
  <section className="friendly-card"><div className="friendly-heading"><h3>What could my holdings be worth later?</h3><p>An illustration using the past year's average returns and fluctuations, keeping today's stock quantities unchanged.</p></div>
  <div className="scenario-row"><span>Look ahead:</span>{[5,20].map(n=><button key={n} className={"chip-btn"+(days===n?" chip-active":"")} onClick={()=>setDays(n)} type="button">{n} trading days</button>)}</div>
@@ -26,12 +27,12 @@ export default function PortfolioRisk(){
  <p className="friendly-note">This is a possible-values illustration, not an ML portfolio forecast, guaranteed range or investment advice. It excludes uninvested cash and future buying/selling. Past averages may not continue.</p></section>
  <section className="friendly-card"><div className="friendly-heading"><h3>What if the overall market falls?</h3><p>Pick a hypothetical fall to explore its possible effect. This does not predict that a fall will happen.</p></div>
  <div className="scenario-row"><span>Market falls by:</span>{[5,10,20].map(n=><button className={"chip-btn"+(fall===n?" chip-active":"")} key={n} type="button" onClick={()=>{setFall(n);load(n)}}>{n}%</button>)}</div>
- {st&&<><div className="whatif-result"><span>Illustrated loss on your stock holdings</span><strong className="down">{inr(Math.abs(change))}</strong><small>Estimated remaining stock value: {inr(s.marketValue+change)}. {haveBeta?"Uses historical beta of your stocks.":"Uses an equal-percentage-drop assumption because some beta data is unavailable."}</small></div>
+ {st&&<><div className="whatif-result"><span>Illustrated loss on your stock holdings</span><strong className="down">{inr(Math.abs(change))}</strong><small>Estimated remaining stock value: {inr(s.marketValue+change)}. {haveBeta?"Uses measured historical beta of your stocks.":"Assumes every holding falls by the selected percentage, because measured beta is unavailable for at least one stock. This is NOT a calculated beta of 1."}</small></div>
  <p className="friendly-note">This scenario checks what might happen IF the market dropped. It does not claim the market will fall.</p></>}
  </section>
- <section className="friendly-card"><div className="friendly-heading"><h3>Which stocks make up my portfolio?</h3></div><div className="research-table-wrap"><table className="research-table"><thead><tr><th>Stock</th><th>Current value</th><th>Share of holdings</th></tr></thead><tbody>{data.holdings.map(h=><tr key={h.symbol}><td>{h.symbol}</td><td>{inr(h.marketValue)}</td><td>{h.weightPct}%</td></tr>)}</tbody></table></div>
+ <section className="friendly-card"><div className="friendly-heading"><h3>Which stocks make up my portfolio?</h3></div><div className="research-table-wrap"><table className="research-table"><thead><tr><th>Stock</th><th>Current value</th><th>Share of holdings</th><th>Beta vs NIFTY 50</th></tr></thead><tbody>{data.holdings.map(h=><tr key={h.symbol}><td>{h.symbol}</td><td>{inr(h.marketValue)}</td><td>{h.weightPct}%</td><td>{h.beta == null ? "Unavailable" : h.beta.toFixed(2)}</td></tr>)}</tbody></table></div>
  {data.flags.length>0&&<p className="friendly-note">Something to notice: {data.flags[0]}</p>}
- {data.warnings.length>0&&<details className="friendly-details"><summary>Data limitations</summary>{data.warnings.map((w,i)=><p key={i}>{w}</p>)}</details>}
+ {data.warnings.length>0&&<details className="friendly-details" open={s.beta==null}><summary>Why some numbers may be unavailable</summary>{data.warnings.map((w,i)=><p key={i}>{w}</p>)}</details>}
  </section>
  </>}
  </>;

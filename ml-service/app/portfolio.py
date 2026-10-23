@@ -152,7 +152,7 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
         else:
             warnings.append("Benchmark history overlapped too little with the holdings; betas are unavailable.")
     else:
-        warnings.append("Benchmark (NIFTY 50) history was unavailable; betas are unavailable and the beta-adjusted stress test assumes beta = 1.")
+        warnings.append("NIFTY 50 history was unavailable. Actual beta cannot be calculated; the market-fall tester will use the clearly labelled equal-fall scenario instead.")
     port_beta = None
     if all(b is not None for b in betas.values()):
         port_beta = float(sum(w[i] * betas[s] for i, s in enumerate(covered)))
@@ -216,14 +216,23 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
     for h in holdings:
         b = betas.get(h["symbol"])
         if b is None:
+            # Never invent a measured beta of 1 when benchmark data is absent.
             assumed.append(h["symbol"])
-            b_used = 1.0
-        else:
-            b_used = b
-        move = max(-100.0, b_used * shock)
+            per_holding.append({
+                "symbol": h["symbol"], "betaUsed": None,
+                "estimatedMovePct": None, "estimatedValueChange": None,
+            })
+            continue
+        move = max(-100.0, b * shock)
         change = h["marketValue"] * move / 100
         beta_change += change
-        per_holding.append({"symbol": h["symbol"], "betaUsed": round(b_used, 2), "estimatedMovePct": _r2(move), "estimatedValueChange": _r2(change)})
+        per_holding.append({"symbol": h["symbol"], "betaUsed": round(b, 2), "estimatedMovePct": _r2(move), "estimatedValueChange": _r2(change)})
+    has_complete_beta = not assumed
+    if not has_complete_beta:
+        warnings.append(
+            "Beta-adjusted market-fall result is unavailable because beta could not be measured for: "
+            + ", ".join(assumed) + ". The equal-fall scenario is still available."
+        )
     worst_day_date = port_returns.idxmin()
     five_day = (1 + port_returns).rolling(5).apply(np.prod, raw=True) - 1
     five_day = five_day.dropna()
@@ -235,10 +244,15 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
             "estimatedPortfolioValue": _r2(total_value + uniform_change),
         },
         "betaAdjusted": {
-            "description": f"The market moves {shock:+g}% and each stock moves by its historical beta times that amount.",
-            "estimatedValueChange": _r2(beta_change),
-            "estimatedPortfolioValue": _r2(total_value + beta_change),
-            "estimatedChangePct": _r2(beta_change / total_value * 100),
+            "description": (
+                f"The market moves {shock:+g}% and each stock moves by its measured historical beta."
+                if has_complete_beta else
+                "Unavailable: measured beta is missing for at least one holding; use the uniform market-fall scenario."
+            ),
+            "available": has_complete_beta,
+            "estimatedValueChange": _r2(beta_change) if has_complete_beta else None,
+            "estimatedPortfolioValue": _r2(total_value + beta_change) if has_complete_beta else None,
+            "estimatedChangePct": _r2(beta_change / total_value * 100) if has_complete_beta else None,
             "perHolding": per_holding,
             "betaAssumedForOneOf": assumed,
         },
