@@ -1,0 +1,19 @@
+import React,{useState} from "react";
+import {STOCKS,getJson,formatMoney,inr,ErrorBox,Spinner,LineChart} from "./shared";
+const trend={Upward:"Recent prices have generally moved upward.",Downward:"Recent prices have generally moved downward.",Mixed:"The recent price direction is mixed."};
+export default function StockOutlook(){
+ const [symbol,setSymbol]=useState("TCS"),[result,setResult]=useState(null),[error,setError]=useState(""),[loading,setLoading]=useState(false);
+ const load=async()=>{setLoading(true);setError("");setResult(null);try{setResult(await getJson("/api/research/analyze?symbol="+encodeURIComponent(symbol)));}catch(e){setError(e.message);}finally{setLoading(false);}};
+ const o=result?.priceOutlook,p=result?.prediction,h=result?.latest;
+ const basic=p&&p.walkForwardAccuracyPct<=Math.max(p.alwaysUpAccuracyPct,p.majorityBaselineAccuracyPct);
+ return <><section className="friendly-card"><div className="friendly-heading"><h3>What's happening with this stock?</h3><p>Choose TCS, M&M or another company to explore its past price moves and a cautious illustration for the next trading session.</p></div><div className="research-controls"><select aria-label="Choose a company" value={symbol} onChange={e=>setSymbol(e.target.value)}>{STOCKS.map(([s,name])=><option value={s} key={s}>{name} ({s})</option>)}</select><button className="research-run-btn" type="button" disabled={loading} onClick={load}>{loading?<><Spinner/> Checking...</>:"Explore company"}</button></div></section>
+ {error&&<ErrorBox title="Could not analyse this company" message={error} onRetry={load}/>}
+ {result&&<><section className="friendly-card"><div className="friendly-heading"><h3>{symbol}: recent stock prices</h3><p>Last historical closing price on {o.lastHistoricalDate}: ₹{formatMoney(o.lastHistoricalClose)}. May differ from the latest quoted price.</p></div>
+ <LineChart labels={result.chart.map(x=>x.date)} series={[{name:"Historical closing price",tone:"a",points:result.chart.map(x=>x.close)}]} format={v=>inr(v)}/>
+ <p className="friendly-note">{trend[h.trend]||"Recent price direction is unclear."} Over the past year, the closing price changed by {h.oneYearReturnPct}%.</p></section>
+ <section className="friendly-card"><div className="friendly-heading"><h3>What might the next closing price look like?</h3><p>An experimental illustration for the next trading session, not a target or guaranteed prediction.</p></div>
+ <div className="friendly-stat-grid"><div className="friendly-stat"><span>Illustrated next closing price</span><strong>₹{formatMoney(o.illustrativePrice)}</strong><small>Derived from a direction estimate and typical recent daily moves</small></div><div className="friendly-stat"><span>Possible movement illustration</span><strong>₹{formatMoney(o.lowerIllustration)} to ₹{formatMoney(o.upperIllustration)}</strong><small>One recent daily standard deviation, NOT a confidence interval</small></div><div className="friendly-stat"><span>Model's estimated chance of an UP close</span><strong>{p.probabilityUpPct.toFixed(0)}%</strong><small>Uncalibrated experimental probability; not a guarantee</small></div></div>
+ <div className="rule-explainer"><b>Can you trust this estimate?</b> The model correctly classified {p.walkForwardAccuracyPct.toFixed(1)}% of historical unseen days. A simple always-UP guess scored {p.alwaysUpAccuracyPct.toFixed(1)}%. {basic?"It did not beat the simple baseline here, so don't treat its future guess as useful.":"Doing better in this historical test does not prove reliable future performance."}</div>
+ <p className="friendly-note">Price estimates for tomorrow, next month or any individual company cannot be made reliably from a few years of past prices alone. This number is an illustration, not a recommendation to buy or sell.</p></section></>}
+ </>;
+}
