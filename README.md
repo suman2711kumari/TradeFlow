@@ -1,4 +1,4 @@
-# TradeFlow (fresher-friendly branch)
+# TradeFlow 
 
 **TradeFlow is a MERN paper-trading website with Python analysis and a read-only Gemini assistant.**
 It uses simulated money and external market prices. It is **not** a real brokerage or investment-advice product.
