@@ -190,10 +190,11 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
         "uniform": uniform,
         "betaAdjusted": beta_adjusted,
         "historicalWorst": {
+            "coveragePct": round(coverage * 100, 2),
             "worstDay": {"returnPct": round(worst_day_return * 100, 2),
-                         "estimatedValueChange": round(total_value * worst_day_return, 2)},
+                         "estimatedValueChange": round(covered_value * worst_day_return, 2)},
             "worstFiveDays": {"returnPct": round(worst_five_day_return * 100, 2),
-                              "estimatedValueChange": round(total_value * worst_five_day_return, 2)},
+                              "estimatedValueChange": round(covered_value * worst_five_day_return, 2)},
         },
     }
 
