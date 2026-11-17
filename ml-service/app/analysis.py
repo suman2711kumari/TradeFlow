@@ -27,11 +27,7 @@ from .common import (
     money,
     pct,
     safe_metrics,
-    significance_margin_pct,
 )
-
-SIGNAL_THRESHOLD = 0.55
-DEFAULT_COST_BPS = 10.0  # per side; a rough all-in figure for brokerage + statutory charges + slippage
 
 
 class AnalysisRequest(BaseModel):
@@ -157,34 +153,6 @@ def run_walk_forward(usable: pd.DataFrame, n_splits: int = 5, gap: int = 1) -> d
     }
 
 
-def backtest_signal(meta: pd.DataFrame, threshold: float = SIGNAL_THRESHOLD, cost_bps: float = DEFAULT_COST_BPS) -> dict[str, Any]:
-    """Long-only strategy on out-of-sample predictions: hold when P(up) >= threshold, otherwise cash."""
-    returns = meta["next_return"].to_numpy(dtype=float)
-    # A signal observed at the close of day t is used only after a full session delay.
-    # This avoids assuming that we can trade at the same close used to create the features.
-    signals = (meta["lr_prob"].to_numpy(dtype=float) >= threshold).astype(float)
-    position = np.concatenate([[0.0], signals[:-1]])
-    turnover = np.abs(np.diff(np.concatenate([[0.0], position, [0.0]])))  # includes the final exit
-    cost = cost_bps / 10_000
-    gross = position * returns
-    net = gross - turnover[:-1] * cost
-    net[-1] -= turnover[-1] * cost
-    trades = int(np.sum((position == 1) & (np.concatenate([[0.0], position[:-1]]) == 0)))
-    return {
-        "strategyReturnPct": pct(np.prod(1 + net) - 1),
-        "strategyGrossReturnPct": pct(np.prod(1 + gross) - 1),
-        "buyAndHoldReturnPct": pct(np.prod(1 + returns) - 1),
-        "strategyMaxDrawdownPct": pct(max_drawdown(net)),
-        "buyAndHoldMaxDrawdownPct": pct(max_drawdown(returns)),
-        "trades": trades,
-        "costBpsPerSide": cost_bps,
-        "testSessions": int(len(meta)),
-        "rule": (
-            f"Out-of-sample walk-forward predictions only. Long when Logistic Regression P(up) >= {int(threshold * 100)}%, otherwise cash. "
-            f"Includes {cost_bps:g} bps per side for costs and slippage. Delays the signal by one session; simplified close-to-close fills (no market impact)."
-        ),
-    }
-
 
 def analyze(payload: AnalysisRequest) -> dict[str, Any]:
     frame = build_frame(payload.quotes)
@@ -194,8 +162,6 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
 
     wf = run_walk_forward(usable)
     meta = wf.pop("_pooled")
-    backtest = backtest_signal(meta)
-
     by_model = {row["model"]: row for row in wf["summary"]}
     lr_acc = by_model["Logistic Regression"]["accuracyPct"]
     rf_acc = by_model["Random Forest"]["accuracyPct"]
@@ -220,12 +186,7 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
     if labelled["target"].nunique() < 2 or latest_rows.empty:
         raise ValueError("Unable to fit a final model from the available historical observations.")
     final_lr = make_logistic().fit(labelled[FEATURES], labelled["target"].astype(int).to_numpy())
-    probability_up = float(prob_up(final_lr, latest_rows.iloc[[-1]][FEATURES])[0])
-    # A second independently fitted model gives a genuine alternate
-    # next-session direction estimate. CNN is evaluation-only and is not a
-    # selectable live predictor.
-    final_rf = make_forest().fit(labelled[FEATURES], labelled["target"].astype(int).to_numpy())
-    probability_up_rf = float(prob_up(final_rf, latest_rows.iloc[[-1]][FEATURES])[0])
+    next_direction = int(final_lr.predict(latest_rows.iloc[[-1]][FEATURES])[0])
 
     close = frame["close"].astype(float)
     latest_close, previous_close = float(close.iloc[-1]), float(close.iloc[-2])
@@ -235,57 +196,14 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
     one_year = close.tail(TRADING_DAYS + 1)
     year_return = float(one_year.iloc[-1] / one_year.iloc[0] - 1) if len(one_year) > 1 else 0.0
     trend = "Upward" if latest_close > sma10 > sma20 else "Downward" if latest_close < sma10 < sma20 else "Mixed"
-    signal = "Bullish bias" if probability_up >= 0.58 else "Bearish bias" if probability_up <= 0.42 else "No strong edge"
     momentum5 = float(frame["momentum_5"].iloc[-1])
     ann_vol = daily_vol * np.sqrt(TRADING_DAYS)
 
     notes = [
         "Latest close is above its 20-session average." if latest_close > sma20 else "Latest close is below its 20-session average.",
         "Five-session momentum is positive." if momentum5 >= 0 else "Five-session momentum is negative.",
-        "Recent realized volatility is elevated; position sizing deserves extra care." if ann_vol >= 0.35 else "Recent realized volatility is comparatively moderate.",
         f"Walk-forward validation: {wf['nSplits']} expanding-window folds, {wf['pooledSessions']} out-of-sample sessions, no shuffling and a {wf['gapSessions']}-session gap between training and test data.",
     ]
-    # A beginner-friendly, model-informed next-session *illustration*, not a
-    # validated numerical price forecast. The classifier predicts direction;
-    # the possible size of a move is taken from the last 90 daily returns.
-    # We show the recent one-standard-deviation band, not a confidence interval.
-    recent = close.pct_change().dropna().tail(90)
-    up_days = recent[recent > 0]
-    other_days = recent[recent <= 0]
-    expected_move = (
-        probability_up * float(up_days.mean() if len(up_days) else 0.0)
-        + (1.0 - probability_up) * float(other_days.mean() if len(other_days) else 0.0)
-    )
-    daily_spread = float(recent.std(ddof=0)) if len(recent) > 1 else 0.0
-    estimated_close = max(0.0, latest_close * (1.0 + expected_move))
-    lower_close = max(0.0, latest_close * (1.0 + expected_move - daily_spread))
-    upper_close = max(lower_close, latest_close * (1.0 + expected_move + daily_spread))
-    # Compare EACH selectable model to the best trivial guess over identical
-    # walk-forward test sessions. This is a cautious screening rule, NOT a
-    # statistical proof or a probability-calibration test.
-    model_outlooks = {}
-    for key, model_name, model_acc, model_probability in (
-        ("logisticRegression", "Logistic Regression", lr_acc, probability_up),
-        ("randomForest", "Random Forest", rf_acc, probability_up_rf),
-    ):
-        accuracy_gap = model_acc - best_baseline
-        passes_screen = accuracy_gap > margin
-        model_outlooks[key] = {
-            "model": model_name,
-            "probabilityUpPct": pct(model_probability),
-            "walkForwardAccuracyPct": model_acc,
-            "baselineAccuracyPct": best_baseline,
-            "accuracyAdvantagePctPoints": round(accuracy_gap, 2),
-            "screeningMarginPctPoints": round(margin, 2),
-            "hasDemonstratedEdge": bool(passes_screen),
-            "message": (
-                "This model exceeded the basic accuracy screening threshold in this historical test, "
-                "but its future predictions are still unverified and its probabilities are not calibrated."
-                if passes_screen else
-                "This model has not clearly beaten a simple historical guess; "
-                "its next-session probability is experimental, not a reliable trading signal."
-            ),
-        }
     chart_frame = frame.tail(120)
     return {
         "symbol": payload.symbol.upper(),
@@ -300,32 +218,16 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
             "annualizedVolatilityPct": pct(ann_vol), "maxDrawdownPct": pct(max_drawdown(recent_returns.tolist())),
         },
         "prediction": {
-            "direction": signal,
-            "probabilityUpPct": pct(probability_up), "probabilityDownPct": pct(1 - probability_up),
+            "direction": "UP" if next_direction == 1 else "NOT_UP",
             "model": "scikit-learn Logistic Regression (refit on all labelled history)",
             "walkForwardAccuracyPct": lr_acc,
             "majorityBaselineAccuracyPct": by_model["Majority class (training data)"]["accuracyPct"],
             "alwaysUpAccuracyPct": by_model["Always predict up"]["accuracyPct"],
-            "edgeAssessment": assessment,
-            "thresholdPct": int(SIGNAL_THRESHOLD * 100),
-            "disclaimer": "Experimental estimate, not investment advice. Probabilities are not calibrated and short-term returns are very noisy.",
-        },
-        "priceOutlook": {
-            "horizon": "Next trading session",
-            "lastHistoricalClose": money(latest_close),
-            "lastHistoricalDate": frame["date"].iloc[-1].strftime("%Y-%m-%d"),
-            "illustrativePrice": money(estimated_close),
-            "lowerIllustration": money(lower_close),
-            "upperIllustration": money(upper_close),
-            "historicalDailyMovePct": pct(daily_spread),
-            "expectedMovePct": pct(expected_move),
-            "method": "Logistic Regression next-session UP probability combined with average size of recent UP and non-UP daily moves (last 90 sessions).",
-            "warning": "Illustration only. The direction model is not calibrated and may not beat a basic guess; this is not a reliable future price forecast. The band is one recent daily standard deviation, not a confidence interval. Based on the last available historical close, not a guaranteed executable quote."
+            "assessment": assessment,
+            "disclaimer": "Experimental next-session direction classification, not a calibrated probability or a trading recommendation. Short-term market direction is highly uncertain.",
         },
         "walkForward": wf,
-        "modelOutlooks": model_outlooks,
         "modelComparison": wf["summary"],
-        "backtest": backtest,
         "chart": [{"date": row.date.strftime("%Y-%m-%d"), "close": money(row.close)} for row in chart_frame.itertuples(index=False)],
         "researchNotes": notes,
     }
