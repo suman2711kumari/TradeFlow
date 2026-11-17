@@ -213,7 +213,6 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
             "disclaimer": "Experimental next-session direction classification, not a calibrated probability or a trading recommendation. Short-term market direction is highly uncertain.",
         },
         "walkForward": wf,
-        "modelComparison": wf["summary"],
         "chart": [{"date": row.date.strftime("%Y-%m-%d"), "close": money(row.close)} for row in chart_frame.itertuples(index=False)],
         "researchNotes": notes,
     }
