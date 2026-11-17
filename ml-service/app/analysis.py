@@ -71,7 +71,7 @@ def walk_forward_splits(n: int, n_splits: int = 5, initial_frac: float = 0.4, ga
 def run_walk_forward(usable: pd.DataFrame, n_splits: int = 5, gap: int = 1) -> dict[str, Any]:
     n = len(usable)
     folds: list[dict[str, Any]] = []
-    pooled: dict[str, dict[str, list]] = {k: {"y": [], "pred": [], "prob": []} for k in ("lr", "rf", "majority", "always_up")}
+    pooled: dict[str, dict[str, list]] = {k: {"y": [], "pred": []} for k in ("lr", "rf", "majority", "always_up")}
     pooled_meta: list[pd.DataFrame] = []
 
     for number, (train_end, test_start, test_end) in enumerate(walk_forward_splits(n, n_splits, gap=gap), start=1):
@@ -95,11 +95,9 @@ def run_walk_forward(usable: pd.DataFrame, n_splits: int = 5, gap: int = 1) -> d
             "majority": np.full(len(test), majority_class),
             "always_up": np.ones(len(test), dtype=int),
         }
-        probs = {"lr": lr_prob, "rf": rf_prob, "majority": np.full(len(test), float(majority_class)), "always_up": np.ones(len(test))}
         for key in pooled:
             pooled[key]["y"].extend(y_test.tolist())
             pooled[key]["pred"].extend(preds[key].tolist())
-            pooled[key]["prob"].extend(probs[key].tolist())
         pooled_meta.append(pd.DataFrame({"date": test["date"].to_numpy(), "next_return": test["next_return"].to_numpy(), "lr_prob": lr_prob}))
 
         folds.append({
