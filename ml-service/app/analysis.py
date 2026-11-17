@@ -207,8 +207,9 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
     # TensorFlow is optional. Keep the classical analysis usable when the optional
     # CNN dependency is missing, but make that limitation explicit in the response.
     try:
-        from .cnn import CnnUnavailable, run_live_cnn_prediction
-        cnn_outlook = run_live_cnn_prediction(payload)
+        from .cnn import CnnRequest, CnnUnavailable, run_live_cnn_prediction
+        cnn_payload = CnnRequest(symbol=payload.symbol, quotes=payload.quotes)
+        cnn_outlook = run_live_cnn_prediction(cnn_payload)
         model_outlooks["cnn"] = {
             "model": "1D CNN",
             "available": True,
