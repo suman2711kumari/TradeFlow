@@ -223,7 +223,7 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
             "walkForwardAccuracyPct": lr_acc,
             "majorityBaselineAccuracyPct": by_model["Majority class (training data)"]["accuracyPct"],
             "alwaysUpAccuracyPct": by_model["Always predict up"]["accuracyPct"],
-            "assessment": assessment,
+            "edgeAssessment": assessment,
             "disclaimer": "Experimental next-session direction classification, not a calibrated probability or a trading recommendation. Short-term market direction is highly uncertain.",
         },
         "walkForward": wf,
