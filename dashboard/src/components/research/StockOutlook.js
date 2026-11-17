@@ -4,6 +4,7 @@ import { STOCKS, getJson, formatMoney, ErrorBox, Spinner, LineChart } from "./sh
 const CHOICES = [
   ["logisticRegression", "Logistic Regression"],
   ["randomForest", "Random Forest"],
+  ["cnn", "1D CNN"],
 ];
 const trend = {
   Upward: "Recent prices have generally moved upward.",
@@ -33,13 +34,13 @@ export default function StockOutlook() {
 
   const outlook = result?.modelOutlooks?.[selected];
   const latest = result?.latest;
-  const p = result?.priceOutlook;
+  const chart = result?.chart || [];
 
   return <>
     <section className="friendly-card">
       <div className="friendly-heading">
         <h3>Explore a company's share prices</h3>
-        <p>See what actually happened in the past and check how reliable our experimental next-session direction guesses have been.</p>
+        <p>See historical prices and compare three experimental models that classify the direction of the next trading session.</p>
       </div>
       <div className="research-controls">
         <label>Company
@@ -54,57 +55,57 @@ export default function StockOutlook() {
     </section>
 
     {error && <ErrorBox title="Could not analyse this company" message={error} onRetry={load} />}
+    {loading && !result && <div className="research-loading"><Spinner /> Loading historical data and model calculations...</div>}
     {result && <>
       <section className="friendly-card">
         <div className="friendly-heading">
           <h3>{symbol}: what has the price done?</h3>
-          <p>Last historical closing price: ₹{formatMoney(p.lastHistoricalClose)} ({p.lastHistoricalDate}). This can differ from today's latest quote.</p>
+          <p>Last historical close: ₹{formatMoney(latest.price)} ({chart[chart.length - 1]?.date || "latest available session"}). This is historical market data, not a future price estimate.</p>
         </div>
-        <LineChart labels={result.chart.map(x => x.date)}
-          series={[{ name: "Past closing prices (not predictions)", tone: "a", points: result.chart.map(x => x.close) }]}
+        <LineChart labels={chart.map(x => x.date)}
+          series={[{ name: "Past closing prices (not predictions)", tone: "a", points: chart.map(x => x.close) }]}
           format={value => "₹" + formatMoney(value)} />
         <p className="friendly-note">{trend[latest.trend] || trend.Mixed} Over the past year the closing price changed by {latest.oneYearReturnPct}%.</p>
       </section>
 
       <section className="friendly-card">
         <div className="friendly-heading">
-          <h3>Can a computer guess the next direction?</h3>
-          <p>Choose an approach to see its experimental guess about whether the next trading session closes above the last known close. Switching changes the displayed model's estimate.</p>
+          <h3>Three models, three next-session estimates</h3>
+          <p>Each model is trained on historical data and estimates whether the next session will close above the latest known close. These are model scores, not calibrated real-world probabilities.</p>
         </div>
         <div className="research-controls">
           <label>Prediction model
             <select value={selected} onChange={e => setSelected(e.target.value)}>
-              {CHOICES.map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+              {CHOICES.map(([key, name]) => <option key={key} value={key}>{name}{result.modelOutlooks?.[key]?.available === false ? " (unavailable)" : ""}</option>)}
             </select>
           </label>
         </div>
-        {outlook ? <>
+        {outlook?.available ? <>
           <div className="friendly-stat-grid">
             <div className="friendly-stat">
-              <span>Experimental chance of a higher next close</span>
-              <strong>{outlook.probabilityUpPct.toFixed(0)}%</strong>
-              <small>From {outlook.model}, not a guaranteed or calibrated probability</small>
+              <span>Model's estimated chance of a higher next close</span>
+              <strong>{outlook.probabilityUpPct.toFixed(1)}%</strong>
+              <small>{outlook.direction === "UP" ? "Model classifies the next session as UP" : "Model classifies the next session as NOT UP"}</small>
             </div>
             <div className="friendly-stat">
-              <span>Correct guesses in historical testing</span>
-              <strong>{outlook.walkForwardAccuracyPct.toFixed(1)}%</strong>
-              <small>Five walk-forward test periods using previously unseen days</small>
+              <span>Accuracy on historical unseen data</span>
+              <strong>{outlook.evaluationAccuracyPct.toFixed(1)}%</strong>
+              <small>{outlook.evaluationLabel}</small>
             </div>
             <div className="friendly-stat">
-              <span>Best simple guessing method</span>
+              <span>Simple baseline accuracy</span>
               <strong>{outlook.baselineAccuracyPct.toFixed(1)}%</strong>
-              <small>Reference score on those same historical days</small>
+              <small>Reference score, not a trading benchmark</small>
             </div>
           </div>
-          <div className="rule-explainer">
-            <b>{outlook.hasDemonstratedEdge ? "Historical testing showed a possible advantage." : "No convincing advantage over simple guessing."}</b>{" "}
-            {outlook.message}
-          </div>
-          <p className="friendly-note">
-            We do not show an exact future price: these models classify UP versus not-UP and have not been validated as price-forecasting models.
-            The chart above is real past data, not a predicted price path.
-          </p>
-        </> : <p className="friendly-note">A current direction estimate is unavailable. Try refreshing your stock analysis.</p>}
+          <div className="rule-explainer"><b>{outlook.model}</b>: {outlook.message}</div>
+        </> : <div className="friendly-note">
+          {outlook?.unavailableReason || "This model's prediction is unavailable in the current ML-service environment."}
+          {selected === "cnn" ? " Install the optional dependencies with: python -m pip install -r requirements-cnn.txt, then restart the ML service." : " Try running the analysis again."}
+        </div>}
+        <p className="friendly-note">
+          Logistic Regression and Random Forest are evaluated with expanding-window walk-forward validation. The CNN uses a separate chronological train/validation/test split, so its accuracy is not directly comparable to the other two. No model predicts an exact future price, and none is a buy/sell recommendation.
+        </p>
       </section>
     </>}
   </>;

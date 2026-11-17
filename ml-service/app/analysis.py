@@ -171,8 +171,57 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
     latest_rows = frame.dropna(subset=FEATURES)
     if labelled["target"].nunique() < 2 or latest_rows.empty:
         raise ValueError("Unable to fit a final model from the available historical observations.")
-    final_lr = make_logistic().fit(labelled[FEATURES], labelled["target"].astype(int).to_numpy())
-    next_direction = int(final_lr.predict(latest_rows.iloc[[-1]][FEATURES])[0])
+    y_labelled = labelled["target"].astype(int).to_numpy()
+    latest_features = latest_rows.iloc[[-1]][FEATURES]
+    final_lr = make_logistic().fit(labelled[FEATURES], y_labelled)
+    final_rf = make_forest().fit(labelled[FEATURES], y_labelled)
+
+    lr_probability = float(prob_up(final_lr, latest_features)[0])
+    rf_probability = float(prob_up(final_rf, latest_features)[0])
+    next_direction = int(lr_probability >= 0.5)
+    baseline_accuracy = best_baseline
+
+    model_outlooks = {
+        "logisticRegression": {
+            "model": "Logistic Regression",
+            "available": True,
+            "direction": "UP" if lr_probability >= 0.5 else "NOT_UP",
+            "probabilityUpPct": pct(lr_probability),
+            "evaluationAccuracyPct": lr_acc,
+            "evaluationLabel": "5-fold expanding-window walk-forward",
+            "baselineAccuracyPct": baseline_accuracy,
+            "message": "Historical walk-forward score compared with simple baselines; it is not evidence of a dependable trading edge.",
+        },
+        "randomForest": {
+            "model": "Random Forest",
+            "available": True,
+            "direction": "UP" if rf_probability >= 0.5 else "NOT_UP",
+            "probabilityUpPct": pct(rf_probability),
+            "evaluationAccuracyPct": rf_acc,
+            "evaluationLabel": "5-fold expanding-window walk-forward",
+            "baselineAccuracyPct": baseline_accuracy,
+            "message": "Historical walk-forward score compared with simple baselines; it is not evidence of a dependable trading edge.",
+        },
+    }
+
+    # TensorFlow is optional. Keep the classical analysis usable when the optional
+    # CNN dependency is missing, but make that limitation explicit in the response.
+    try:
+        from .cnn import CnnUnavailable, run_live_cnn_prediction
+        cnn_outlook = run_live_cnn_prediction(payload)
+        model_outlooks["cnn"] = {
+            "model": "1D CNN",
+            "available": True,
+            **cnn_outlook,
+            "message": "CNN evaluation uses a separate chronological held-out period, not the LR/RF walk-forward folds.",
+        }
+    except (CnnUnavailable, ValueError) as exc:
+        model_outlooks["cnn"] = {
+            "model": "1D CNN",
+            "available": False,
+            "unavailableReason": str(exc),
+            "message": "Install the optional TensorFlow dependencies to generate the CNN prediction.",
+        }
 
     close = frame["close"].astype(float)
     latest_close, previous_close = float(close.iloc[-1]), float(close.iloc[-2])
@@ -203,8 +252,10 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
             "oneYearReturnPct": pct(year_return), "sma10": money(sma10), "sma20": money(sma20), "trend": trend,
             "annualizedVolatilityPct": pct(ann_vol), "maxDrawdownPct": pct(max_drawdown(recent_returns.tolist())),
         },
+        "modelOutlooks": model_outlooks,
         "prediction": {
             "direction": "UP" if next_direction == 1 else "NOT_UP",
+            "probabilityUpPct": pct(lr_probability),
             "model": "scikit-learn Logistic Regression (refit on all labelled history)",
             "walkForwardAccuracyPct": lr_acc,
             "majorityBaselineAccuracyPct": by_model["Majority class (training data)"]["accuracyPct"],

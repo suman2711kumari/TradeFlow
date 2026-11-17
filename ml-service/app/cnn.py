@@ -170,3 +170,60 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
             "A CNN is an experiment here. Daily price direction is very noisy, so a result near 50% is expected.",
         ],
     }
+
+
+def run_live_cnn_prediction(payload: CnnRequest) -> dict[str, Any]:
+    """Evaluate a CNN on a chronological holdout, then refit on labelled history for the latest session."""
+    tf = _tf()
+    frame = build_frame(payload.quotes, min_rows=300)
+    X, y, _ = build_windows(frame)
+    n = len(X)
+    if n < 250:
+        raise ValueError("Not enough history to build CNN windows. Need roughly 300+ sessions of daily data.")
+
+    i_train, i_val = int(n * 0.6), int(n * 0.8)
+    tr = slice(0, i_train - 1)
+    va = slice(i_train, i_val - 1)
+    te = slice(i_val, n)
+    X_tr, y_tr = X[tr], y[tr]
+    X_va, y_va = X[va], y[va]
+    X_te, y_te = X[te], y[te]
+    if len(y_tr) < 2 or len(y_va) < 2 or len(y_te) < 2 or len(np.unique(y_tr)) < 2:
+        raise ValueError("Not enough balanced chronological samples for the CNN evaluation.")
+
+    # The holdout model sees only the training block; validation selects the epoch.
+    mean = X_tr.reshape(-1, X_tr.shape[-1]).mean(axis=0)
+    std = X_tr.reshape(-1, X_tr.shape[-1]).std(axis=0) + 1e-8
+    scale = lambda values: ((values - mean) / std).astype(np.float32)
+    tf.keras.utils.set_random_seed(SEED)
+    holdout_model = build_model(tf, X.shape[-1])
+    history = holdout_model.fit(
+        scale(X_tr), y_tr, validation_data=(scale(X_va), y_va),
+        epochs=payload.epochs, batch_size=32, verbose=0,
+        callbacks=[tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True)],
+    )
+    holdout_prob = holdout_model.predict(scale(X_te), verbose=0).ravel()
+    holdout_accuracy = float(np.mean((holdout_prob >= 0.5).astype(int) == y_te) * 100)
+    best_epoch = max(1, int(np.argmin(history.history["val_loss"])) + 1)
+
+    # Refit using all labelled windows. The final window has no label and is used only for inference.
+    final_mean = X.reshape(-1, X.shape[-1]).mean(axis=0)
+    final_std = X.reshape(-1, X.shape[-1]).std(axis=0) + 1e-8
+    final_model = build_model(tf, X.shape[-1])
+    tf.keras.utils.set_random_seed(SEED)
+    final_model.fit(
+        ((X - final_mean) / final_std).astype(np.float32), y,
+        epochs=best_epoch, batch_size=32, verbose=0,
+    )
+    latest_features = frame[WINDOW_FEATURES].tail(WINDOW).to_numpy(dtype=np.float32)
+    if latest_features.shape != (WINDOW, len(WINDOW_FEATURES)) or not np.isfinite(latest_features).all():
+        raise ValueError("The latest 30-session feature window is incomplete.")
+    latest_window = ((latest_features - final_mean) / final_std).astype(np.float32)[None, ...]
+    probability_up = float(final_model.predict(latest_window, verbose=0).ravel()[0])
+    return {
+        "direction": "UP" if probability_up >= 0.5 else "NOT_UP",
+        "probabilityUpPct": round(probability_up * 100, 2),
+        "evaluationAccuracyPct": round(holdout_accuracy, 2),
+        "evaluationLabel": "Chronological held-out test period",
+        "baselineAccuracyPct": round(max(float(np.mean(y_te) * 100), float(np.mean(1 - y_te) * 100)), 2),
+    }
