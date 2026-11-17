@@ -15,7 +15,7 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 from .analysis import make_forest, make_logistic, prob_up
-from .common import FEATURES, Candle, build_frame, confusion, safe_metrics, significance_margin_pct
+from .common import FEATURES, Candle, build_frame, confusion, safe_metrics
 
 WINDOW = 30
 WINDOW_FEATURES = ["return_1", "hl_range", "oc_return", "vol_chg", "sma_gap_10", "volatility_10"]
@@ -126,15 +126,11 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
     cnn_acc = models[0]["accuracyPct"]
     best_other = max(m["accuracyPct"] for m in models[1:])
     best_baseline = max(m["accuracyPct"] for m in models[3:])
-    margin = significance_margin_pct(len(y_te))
-    if cnn_acc >= best_other + margin:
-        verdict = (f"On this test window the CNN scored {cnn_acc:.1f}% vs {best_other:.1f}% for the best alternative, a gap larger than the noise margin "
-                   f"(about {margin:.1f} points). One window and one stock is still weak evidence; repeat across stocks and periods.")
-    elif cnn_acc <= best_baseline - margin:
-        verdict = f"The CNN ({cnn_acc:.1f}%) did clearly worse than a naive baseline ({best_baseline:.1f}%). That is a typical, honest result for daily price data."
-    else:
-        verdict = (f"The CNN ({cnn_acc:.1f}%) was statistically indistinguishable from the simpler models and baselines ({best_other:.1f}% best); "
-                   f"differences under about {margin:.1f} points are noise for {len(y_te)} test sessions. The extra complexity bought no demonstrated advantage.")
+    verdict = (
+        f"On this held-out test period, the CNN scored {cnn_acc:.1f}% accuracy. "
+        f"The best alternative scored {best_other:.1f}% and the strongest simple baseline scored {best_baseline:.1f}%. "
+        "This single-stock, single-period comparison is descriptive and does not establish a reliable predictive edge."
+    )
 
     dates = frame["date"].to_numpy()
     te_t = t_idx[te]
