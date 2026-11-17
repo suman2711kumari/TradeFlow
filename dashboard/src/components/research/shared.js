@@ -150,14 +150,6 @@ export const GLOSSARY = {
   epoch: "One full pass of the AI model over its training data.",
 };
 
-/** Turns a yearly volatility % into a label a beginner can read. */
-export const riskLevel = (volPct) => {
-  const v = Number(volPct);
-  if (v < 15) return { label: "Low", tone: "risk-low", note: "calm compared with most stock portfolios" };
-  if (v < 25) return { label: "Medium", tone: "risk-mid", note: "about what you'd expect from a stock portfolio" };
-  return { label: "High", tone: "risk-high", note: "bumpier than most stock portfolios" };
-};
-
 export const StatCard = ({ label, value, note, tone, tip }) => (
   <div className="friendly-stat">
     <span>{tip ? <Term label={label} tip={tip} /> : label}</span>
