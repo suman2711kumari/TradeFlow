@@ -1,9 +1,8 @@
-"""Portfolio risk from real historical returns.
+"""Current portfolio risk estimates based on historical individual-stock returns.
 
-The user's own account history is NOT needed. Risk is estimated by replaying the user's CURRENT share
-quantities through the last year of actual market prices of those same stocks. Share quantities stay
-fixed while each stock's portfolio weight changes as its historical price changes. This answers:
-"how would the shares I hold today have behaved over the past year?"
+Historical stock data is used to estimate each holding's volatility, correlations and beta.
+Current portfolio weights combine those statistics into a current risk estimate. The service
+does not reconstruct or claim a historical account-level portfolio performance.
 """
 from __future__ import annotations
 
@@ -114,12 +113,6 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
         warnings.append(f"Only {len(returns)} overlapping daily returns were available (about a year is ideal). Treat the figures as rough.")
 
     w = np.array([rows[s]["value"] / covered_value for s in covered])  # today's weights, used for current risk attribution
-    # Replay today's share quantities through each historical closing price.
-    # Portfolio weights change naturally as each stock's historical price moves.
-    fixed_quantities = pd.Series({s: rows[s]["qty"] for s in covered}, dtype=float)
-    historical_portfolio_values = prices[covered].mul(fixed_quantities, axis=1).sum(axis=1)
-    port_returns = historical_portfolio_values.pct_change().dropna()
-
     cov = returns.cov().to_numpy() * TRADING_DAYS
     sigma = np.sqrt(np.diag(cov))
     port_var = float(w @ cov @ w)
@@ -127,14 +120,6 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
     marginal = cov @ w
     risk_contrib = (w * marginal / port_var) if port_var > 0 else np.zeros_like(w)  # sums to 1
     diversification_ratio = float((w @ sigma) / port_vol) if port_vol > 0 else 1.0
-
-    historical_port_vol = float(port_returns.std(ddof=1) * np.sqrt(TRADING_DAYS))
-    max_dd, dd_date = _drawdown(port_returns)
-    q05 = float(np.quantile(port_returns, 0.05))
-    var95 = -q05
-    tail = port_returns[port_returns <= q05]
-    es95 = float(-tail.mean()) if len(tail) else var95
-    window_return = float((1 + port_returns).prod() - 1)
 
     # ---- correlations -----------------------------------------------------------------------------
     corr = returns.corr().fillna(0.0)
@@ -161,15 +146,8 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
     else:
         warnings.append("NIFTY 50 history was unavailable. Actual beta cannot be calculated; the market-fall tester will use the clearly labelled equal-fall scenario instead.")
     port_beta = None
-    if payload.benchmark:
-        portfolio_benchmark = pd.concat(
-            [port_returns.rename("__portfolio__"), bench.rename("__bench__")], axis=1
-        ).dropna()
-        if len(portfolio_benchmark) >= MIN_OBSERVATIONS and portfolio_benchmark["__bench__"].var() > 0:
-            port_beta = float(
-                portfolio_benchmark["__portfolio__"].cov(portfolio_benchmark["__bench__"])
-                / portfolio_benchmark["__bench__"].var()
-            )
+    if all(b is not None for b in betas.values()):
+        port_beta = float(sum(w[i] * betas[s] for i, s in enumerate(covered)))
 
     # ---- per-holding table ------------------------------------------------------------------------
     holdings = []
@@ -247,57 +225,7 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
             "Beta-adjusted market-fall result is unavailable because beta could not be measured for: "
             + ", ".join(assumed) + ". The equal-fall scenario is still available."
         )
-    worst_day_date = port_returns.idxmin()
-    five_day = (1 + port_returns).rolling(5).apply(np.prod, raw=True) - 1
-    five_day = five_day.dropna()
-    worst_day_position = historical_portfolio_values.index.get_loc(worst_day_date)
-    worst_day_change = (
-        float(historical_portfolio_values.iloc[worst_day_position] - historical_portfolio_values.iloc[worst_day_position - 1])
-        if worst_day_position > 0 else 0.0
-    )
-    worst_five_day_date = five_day.idxmin() if len(five_day) else None
-    worst_five_day_position = (
-        historical_portfolio_values.index.get_loc(worst_five_day_date)
-        if worst_five_day_date is not None else None
-    )
-    worst_five_day_change = (
-        float(historical_portfolio_values.iloc[worst_five_day_position] - historical_portfolio_values.iloc[worst_five_day_position - 5])
-        if worst_five_day_position is not None and worst_five_day_position >= 5 else None
-    )
-    stress = {
-        "marketShockPct": shock,
-        "uniform": {
-            "description": f"Every holding falls exactly {abs(shock):g}% ({'drop' if shock < 0 else 'rise'}).",
-            "estimatedValueChange": _r2(uniform_change),
-            "estimatedPortfolioValue": _r2(total_value + uniform_change),
-        },
-        "betaAdjusted": {
-            "description": (
-                f"The market moves {shock:+g}% and each stock moves by its measured historical beta."
-                if has_complete_beta else
-                "Unavailable: measured beta is missing for at least one holding; use the uniform market-fall scenario."
-            ),
-            "available": has_complete_beta,
-            "estimatedValueChange": _r2(beta_change) if has_complete_beta else None,
-            "estimatedPortfolioValue": _r2(total_value + beta_change) if has_complete_beta else None,
-            "estimatedChangePct": _r2(beta_change / total_value * 100) if has_complete_beta else None,
-            "perHolding": per_holding,
-            "betaAssumedForOneOf": assumed,
-        },
-        "historicalWorst": {
-            "description": "Replays the fixed number of shares you hold today against historical closing prices. This is not your actual past account history.",
-            "worstDay": {
-                "date": pd.Timestamp(worst_day_date).strftime("%Y-%m-%d"),
-                "returnPct": _r2(port_returns.min() * 100),
-                "estimatedValueChange": _r2(worst_day_change),
-            },
-            "worstFiveDays": {
-                "endDate": pd.Timestamp(worst_five_day_date).strftime("%Y-%m-%d") if worst_five_day_date is not None else None,
-                "returnPct": _r2(five_day.min() * 100) if len(five_day) else None,
-                "estimatedValueChange": _r2(worst_five_day_change) if worst_five_day_change is not None else None,
-            },
-        },
-    }
+
 
     return {
         "asOf": returns.index[-1].strftime("%Y-%m-%d"),
@@ -313,13 +241,7 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
             "costValue": _r2(total_cost),
             "unrealizedPnl": _r2(total_value - total_cost),
             "unrealizedPnlPct": _r2((total_value - total_cost) / total_cost * 100) if total_cost else 0.0,
-            "annualizedVolatilityPct": _r2(historical_port_vol * 100),
-            "maxDrawdownPct": _r2(max_dd * 100),
-            "maxDrawdownTroughDate": dd_date,
-            "windowReturnPct": _r2(window_return * 100),
-            "var95OneDayPct": _r2(var95 * 100),
-            "var95OneDayInr": _r2(var95 * covered_value),
-            "expectedShortfall95Pct": _r2(es95 * 100),
+            "annualizedVolatilityPct": _r2(port_vol * 100),
             "beta": None if port_beta is None else round(port_beta, 2),
             "betaBenchmark": benchmark_note,
             "diversificationRatio": round(diversification_ratio, 2),
@@ -336,11 +258,9 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
         "stress": stress,
         "warnings": warnings,
         "methodology": (
-            "Today's share quantities are replayed through the last year of actual daily closing prices (Yahoo Finance); quantities stay fixed "
-            "and portfolio weights change as prices move. Portfolio volatility, drawdown, window return, VaR and expected shortfall use these "
-            "fixed-quantity historical portfolio returns. Correlation and individual stock statistics use each stock's daily returns. Risk contribution "
-            "uses today's portfolio weights and the historical covariance matrix, so it describes current-mix risk attribution. Portfolio beta is measured "
-            "from the fixed-quantity portfolio returns against NIFTY 50. All figures are backward-looking, use the overlapping available price-history "
-            "window, and are not the user's actual past account performance."
+            "Historical daily prices are used to estimate each stock's volatility, correlations and beta. Current portfolio weights are then "
+            "combined with the historical covariance matrix to estimate the risk of the portfolio as it is held today. Risk contribution reflects "
+            "each holding's contribution to estimated current portfolio variance. These are historical-data-based risk estimates, not a reconstruction "
+            "of the user's past account performance or a prediction of future returns."
         ),
     }
