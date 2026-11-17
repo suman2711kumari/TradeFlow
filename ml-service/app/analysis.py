@@ -72,7 +72,6 @@ def run_walk_forward(usable: pd.DataFrame, n_splits: int = 5, gap: int = 1) -> d
     n = len(usable)
     folds: list[dict[str, Any]] = []
     pooled: dict[str, dict[str, list]] = {k: {"y": [], "pred": []} for k in ("lr", "rf", "majority", "always_up")}
-    pooled_meta: list[pd.DataFrame] = []
 
     for number, (train_end, test_start, test_end) in enumerate(walk_forward_splits(n, n_splits, gap=gap), start=1):
         train, test = usable.iloc[:train_end], usable.iloc[test_start:test_end]
@@ -98,7 +97,6 @@ def run_walk_forward(usable: pd.DataFrame, n_splits: int = 5, gap: int = 1) -> d
         for key in pooled:
             pooled[key]["y"].extend(y_test.tolist())
             pooled[key]["pred"].extend(preds[key].tolist())
-        pooled_meta.append(pd.DataFrame({"date": test["date"].to_numpy(), "next_return": test["next_return"].to_numpy(), "lr_prob": lr_prob}))
 
         folds.append({
             "fold": number,
@@ -139,15 +137,13 @@ def run_walk_forward(usable: pd.DataFrame, n_splits: int = 5, gap: int = 1) -> d
             "confusion": confusion(y, p),
         })
 
-    meta = pd.concat(pooled_meta, ignore_index=True)
     return {
         "method": "Expanding-window walk-forward validation",
         "nSplits": len(folds),
         "gapSessions": gap,
-        "pooledSessions": int(len(meta)),
+        "pooledSessions": int(len(pooled["lr"]["y"])),
         "folds": folds,
         "summary": summary,
-        "_pooled": meta,  # internal, removed before returning to the client
     }
 
 
@@ -159,7 +155,6 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
         raise ValueError("At least about 200 complete feature rows are needed for walk-forward validation.")
 
     wf = run_walk_forward(usable)
-    meta = wf.pop("_pooled")
     by_model = {row["model"]: row for row in wf["summary"]}
     lr_acc = by_model["Logistic Regression"]["accuracyPct"]
     rf_acc = by_model["Random Forest"]["accuracyPct"]
