@@ -65,7 +65,7 @@ export default function StockOutlook() {
         <LineChart labels={chart.map(x => x.date)}
           series={[{ name: "Past closing prices (not predictions)", tone: "a", points: chart.map(x => x.close) }]}
           format={value => "₹" + formatMoney(value)} />
-        <p className="friendly-note"><b>Recent trend:</b> {trend[latest.trend] || trend.Mixed} <b>One-year price change:</b> {latest.oneYearReturnPct}%. The chart shows the recent {chart.length} plotted observations; it is not a one-year chart.</p>
+        <p className="friendly-note"><b>Short-term trend:</b> {trend[latest.trend] || trend.Mixed} This compares the latest close with its 10- and 20-session moving averages. <b>Chart:</b> last 120 trading sessions (roughly six months). <b>One-year price change:</b> {latest.oneYearReturnPct}%.</p>
       </section>
 
       <section className="friendly-card">
