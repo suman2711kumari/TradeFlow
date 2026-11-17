@@ -65,7 +65,7 @@ export default function StockOutlook() {
         <LineChart labels={chart.map(x => x.date)}
           series={[{ name: "Past closing prices (not predictions)", tone: "a", points: chart.map(x => x.close) }]}
           format={value => "₹" + formatMoney(value)} />
-        <p className="friendly-note">{trend[latest.trend] || trend.Mixed} Over the past year the closing price changed by {latest.oneYearReturnPct}%.</p>
+        <p className="friendly-note"><b>Recent trend:</b> {trend[latest.trend] || trend.Mixed} <b>One-year price change:</b> {latest.oneYearReturnPct}%. The chart shows the recent {chart.length} plotted observations; it is not a one-year chart.</p>
       </section>
 
       <section className="friendly-card">
@@ -83,9 +83,9 @@ export default function StockOutlook() {
         {outlook?.available ? <>
           <div className="friendly-stat-grid">
             <div className="friendly-stat">
-              <span>Model's estimated chance of a higher next close</span>
+              <span>UP model score (not a calibrated probability)</span>
               <strong>{outlook.probabilityUpPct.toFixed(1)}%</strong>
-              <small>{outlook.direction === "UP" ? "Model classifies the next session as UP" : "Model classifies the next session as NOT UP"}</small>
+              <small>{outlook.probabilityUpPct >= 45 && outlook.probabilityUpPct <= 55 ? "Too close to call (45–55% neutral band)" : outlook.probabilityUpPct > 55 ? "UP signal based on the model score" : "NOT UP signal based on the model score"}</small>
             </div>
             <div className="friendly-stat">
               <span>Accuracy on historical unseen data</span>
