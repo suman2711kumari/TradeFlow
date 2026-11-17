@@ -16,8 +16,8 @@ export default function PortfolioRisk(){
  {error&&<ErrorBox message={error.message} title="Could not check your portfolio" onRetry={()=>load(fall)}/>}
  {data&&<>
  <section className="friendly-card"><div className="friendly-heading"><h3>Your investments today</h3></div>
- <div className="friendly-stat-grid"><StatCard label="Value of the stocks you hold" value={inr(s.marketValue)}/><StatCard label="Profit/loss on your current shares" value={inr(s.unrealizedPnl)} tone={s.unrealizedPnl>=0?"up":"down"}/><StatCard label="Estimated annualized volatility" value={s.annualizedVolatilityPct.toFixed(1)+"%"}/></div>
- <p className="friendly-note">Volatility estimates how widely your holdings may fluctuate, using historical stock movements and today's portfolio weights. Beta against NIFTY 50: <b>{s.beta??"unavailable"}</b> (how the current mix's estimated risk relates to market movements). These are historical-data-based estimates, not predictions of future profit.</p>
+ <div className="friendly-stat-grid"><StatCard label="Value of the stocks you hold" value={inr(s.marketValue)}/><StatCard label="Profit/loss on your current shares" value={inr(s.unrealizedPnl)} tone={s.unrealizedPnl>=0?"up":"down"}/><StatCard label="Estimated annualized volatility" value={s.annualizedVolatilityPct.toFixed(1)+"%"}/><StatCard label="Historical maximum drawdown" value={Math.abs(s.maxDrawdownPct).toFixed(1)+"%"}/><StatCard label="1-day historical VaR (95%)" value={s.var95OneDayPct.toFixed(2)+"%"} note="Historical simulation, not a loss limit"/><StatCard label="Expected shortfall (95%)" value={s.expectedShortfall95Pct.toFixed(2)+"%"} note="Average loss in the worst 5% of days"/></div>
+ <p className="friendly-note">Volatility estimates how widely your holdings may fluctuate, using historical stock movements and today's portfolio weights. Beta against NIFTY 50: <b>{s.beta??"unavailable"}</b> (how the current mix's estimated risk relates to market movements). Risk estimates use today's portfolio weights applied to historical daily stock returns. Drawdown, VaR and expected shortfall describe that hypothetical current allocation, not your actual past account performance or future losses.</p>
  {s.beta == null && <div className="rule-explainer"><b>Why is beta unavailable?</b> NIFTY 50 historical market data is missing or did not overlap enough with your stocks' data. We do not replace an unknown beta with 1. The market-fall test will use the simpler equal-fall assumption. Check the data warnings below.</div>}
  </section>
  <section className="friendly-card"><div className="friendly-heading"><h3>What if the overall market falls?</h3><p>Pick a hypothetical fall to explore its possible effect. This does not predict that a fall will happen.</p></div>
@@ -26,7 +26,7 @@ export default function PortfolioRisk(){
  <p className="friendly-note">This scenario checks what might happen IF the market dropped. It does not claim the market will fall.</p></>}
  </section>
  <section className="friendly-card"><div className="friendly-heading"><h3>Which stocks make up my portfolio?</h3></div><div className="research-table-wrap"><table className="research-table"><thead><tr><th>Stock</th><th>Current value</th><th>Share of holdings</th><th>Beta vs NIFTY 50</th></tr></thead><tbody>{data.holdings.map(h=><tr key={h.symbol}><td>{h.symbol}</td><td>{inr(h.marketValue)}</td><td>{h.weightPct}%</td><td>{h.beta == null ? "Unavailable" : h.beta.toFixed(2)}</td></tr>)}</tbody></table></div>
- {data.flags.length>0&&<p className="friendly-note">Something to notice: {data.flags[0]}</p>}
+ 
  {data.warnings.length>0&&<details className="friendly-details" open={s.beta==null}><summary>Why some numbers may be unavailable</summary>{data.warnings.map((w,i)=><p key={i}>{w}</p>)}</details>}
  </section>
  </>}
