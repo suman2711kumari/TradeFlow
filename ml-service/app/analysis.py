@@ -167,18 +167,11 @@ def analyze(payload: AnalysisRequest) -> dict[str, Any]:
     rf_acc = by_model["Random Forest"]["accuracyPct"]
     best_baseline = max(by_model["Majority class (training data)"]["accuracyPct"], by_model["Always predict up"]["accuracyPct"])
     best_model_name, best_model_acc = ("Logistic Regression", lr_acc) if lr_acc >= rf_acc else ("Random Forest", rf_acc)
-    edge = best_model_acc - best_baseline
-    margin = significance_margin_pct(wf["pooledSessions"])
-    if edge > margin:
-        assessment = (
-            f"{best_model_name} beat the best naive baseline by {edge:.1f} points out of sample (noise margin is about {margin:.1f}). "
-            "Picking the better of two models on the same data flatters it, and small edges rarely survive trading costs."
-        )
-    else:
-        assessment = (
-            f"No demonstrated edge: the best model ({best_model_name}, {best_model_acc:.1f}%) is within about {margin:.1f} points of a naive baseline "
-            f"({best_baseline:.1f}%), which is inside the noise for {wf['pooledSessions']} test sessions. Treat the probability below as noise, not a signal."
-        )
+    assessment = (
+        f"On these out-of-sample sessions, {best_model_name} scored {best_model_acc:.1f}% accuracy "
+        f"and the strongest simple baseline scored {best_baseline:.1f}%. "
+        "This historical comparison does not establish a reliable trading edge."
+    )
 
     # Final model: refit on every labelled row, predict the latest (still unlabelled) session.
     labelled = frame.dropna(subset=FEATURES + ["target"])
