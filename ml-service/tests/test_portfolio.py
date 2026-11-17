@@ -37,7 +37,8 @@ def test_identical_assets_have_correlation_one_and_no_diversification():
     out = build_portfolio_risk(req)
     assert out["summary"]["averagePairwiseCorrelation"] == pytest.approx(1.0, abs=0.01)
     assert out["summary"]["diversificationRatio"] == pytest.approx(1.0, abs=0.01)
-    assert any("move together" in f for f in out["flags"])
+    assert out["summary"]["concentrationIndexPct"] == pytest.approx(50.0, abs=0.1)
+    assert out["summary"]["effectiveNumberOfStocks"] == pytest.approx(2.0, abs=0.01)
 
 
 def test_stress_test_values_and_beta_adjustment():
