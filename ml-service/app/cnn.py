@@ -115,13 +115,16 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
     majority = int(np.mean(y_tr) >= 0.5)
 
     preds = {
-        "1D CNN": (cnn_pred, cnn_prob, "Deep learning experiment"),
-        "Logistic Regression": ((lr_prob >= 0.5).astype(int), lr_prob, "Classical baseline"),
-        "Random Forest": ((rf_prob >= 0.5).astype(int), rf_prob, "Classical comparison"),
-        "Majority class (training data)": (np.full(len(y_te), majority), None, "Naive baseline"),
-        "Always predict up": (np.ones(len(y_te), dtype=int), None, "Naive baseline"),
+        "1D CNN": (cnn_pred, "Deep learning experiment"),
+        "Logistic Regression": ((lr_prob >= 0.5).astype(int), "Classical baseline"),
+        "Random Forest": ((rf_prob >= 0.5).astype(int), "Classical comparison"),
+        "Majority class (training data)": (np.full(len(y_te), majority), "Naive baseline"),
+        "Always predict up": (np.ones(len(y_te), dtype=int), "Naive baseline"),
     }
-    models = [{"model": name, "role": role, **safe_metrics(y_te, p), "confusion": confusion(y_te, p)} for name, (p, _, role) in preds.items()]
+    models = [
+        {"model": name, "role": role, **safe_metrics(y_te, prediction), "confusion": confusion(y_te, prediction)}
+        for name, (prediction, role) in preds.items()
+    ]
 
     cnn_acc = models[0]["accuracyPct"]
     best_other = max(m["accuracyPct"] for m in models[1:])
@@ -134,12 +137,6 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
 
     dates = frame["date"].to_numpy()
     te_t = t_idx[te]
-    table = [
-        {"date": pd.Timestamp(dates[t]).strftime("%Y-%m-%d"), "actualUp": int(a), "cnnProbUpPct": round(float(c) * 100, 1),
-         "logisticProbUpPct": round(float(l) * 100, 1), "forestProbUpPct": round(float(r) * 100, 1)}
-        for t, a, c, l, r in list(zip(te_t, y_te, cnn_prob, lr_prob, rf_prob))[-15:]
-    ]
-
     architecture = []
     for layer in model.layers:
         shape = getattr(layer, "output", None)
@@ -166,7 +163,6 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
             "loss": [round(float(v), 4) for v in hist["loss"]],
             "valLoss": [round(float(v), 4) for v in hist["val_loss"]],
         },
-        "predictions": table,
         "verdict": verdict,
         "notes": [
             "Scaling statistics are computed on training windows only; early stopping uses a separate validation block; the test block is never used for fitting or model selection.",
