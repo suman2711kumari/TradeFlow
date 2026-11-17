@@ -96,4 +96,4 @@ Read **INTERVIEW_GUIDE.md** before presenting the project. The main branch has n
 
 ## Transparent stock direction checks
 
-The Stock Outlook page lets a user select Logistic Regression or Random Forest and shows that classifier's **actual next-session UP probability**, its own historical five-fold walk-forward accuracy and the best naive baseline. Probabilities are uncalibrated and should not be used as trading advice. A weak score displays a clear warning, not a forecast price. The price chart always shows **past** market prices. CNN remains an optional **historical** comparison using a separate chronological split, not a live-choice predictor.
+The Stock Analysis page shows historical price behaviour and realised risk measures. The Advanced Lab reports an experimental next-session UP / NOT_UP classification from Logistic Regression and compares Logistic Regression and Random Forest with simple baselines using expanding-window walk-forward validation. It does not display an uncalibrated probability or a predicted price. CNN remains an optional historical comparison using a separate chronological split, not a live trading signal.
