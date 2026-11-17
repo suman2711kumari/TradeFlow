@@ -178,7 +178,7 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
     hhi = sum(weight ** 2 for weight in weights_all.values())
     shock = float(payload.shockPct)
     uniform = _stress_result(total_value, shock)
-    beta_available = all(betas[symbol] is not None for symbol in covered)
+    beta_available = len(covered) == len(rows) and all(betas[symbol] is not None for symbol in covered)
     beta_change = (sum(rows[symbol]["value"] * max(-100.0, betas[symbol] * shock) / 100.0
                        for symbol in covered) if beta_available else None)
     beta_adjusted = {
