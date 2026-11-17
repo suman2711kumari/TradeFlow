@@ -8,7 +8,7 @@ This branch intentionally keeps the features named in the resume and organises t
 ## Features
 
 1. **Paper trading (MERN):** register/log in, watchlist, virtual funds, buy/sell, orders, holdings and simulated profit/loss. The server obtains the price; it does not trust a price submitted by the browser. A conditional MongoDB update rejects a BUY when available cash is insufficient. A MongoDB replica set also enables multi-document transactions. Local standalone MongoDB uses best-effort compensating steps, which are not the same as true transactions.
-2. **Python risk engine:** FastAPI + pandas/NumPy calculate historical **volatility**, **beta vs NIFTY 50**, and **maximum drawdown** for the stocks held now.
+2. **Python risk engine:** FastAPI + pandas/NumPy calculate annualized portfolio volatility, beta vs NIFTY 50, historical maximum drawdown, one-day 95% historical VaR and expected shortfall, correlation, diversification ratio, risk contribution and concentration from the current holdings mix.
 3. **Moving-average backtest:** one understandable rule, 20-day SMA vs 50-day SMA, using past prices and comparing the result with buy-and-hold. A simplified **0.1% per-side** cost is assumed, not actual taxes/brokerage.
 4. **ML comparison:** Logistic Regression and Random Forest evaluated with expanding-window walk-forward validation against simple baselines. Optional TensorFlow 1D CNN is compared on a **separate chronological train/validation/test split**, not the five walk-forward folds.
 5. **Gemini assistant:** explains results using server-side read-only tools; it cannot trade.
