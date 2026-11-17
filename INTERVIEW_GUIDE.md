@@ -14,13 +14,17 @@
 
 **Concurrency:** If cash = Rs 1000 and two requests each need Rs 800, the atomic conditional cash update allows only one debit. On MongoDB Atlas/replica set, a multi-document transaction also groups order and holding changes. Standalone MongoDB uses compensation, not an equivalent transaction guarantee.
 
-## 2. Risk: only three terms are essential
+## 2. Portfolio risk: what the figures mean
 
-- **Volatility:** how widely prices have moved historically; calculated using daily returns.
-- **Beta:** how much stock/portfolio returns tend to move with a market benchmark, here NIFTY 50. Beta is not a guarantee.
-- **Drawdown:** the largest percentage fall from a past peak to a later trough.
+- **Annualized volatility:** standard deviation of daily portfolio returns, scaled by √252.
+- **Beta:** covariance of portfolio returns with NIFTY 50 divided by benchmark return variance.
+- **Maximum drawdown:** largest peak-to-trough decline in the compounded return series.
+- **Historical VaR (95%):** the 5th percentile of one-day historical portfolio returns, expressed as a loss.
+- **Expected shortfall (95%):** average loss among observations in the worst 5% tail.
+- **Diversification ratio and risk contribution:** derived from the annualized covariance matrix and today's portfolio weights.
+- **Concentration (HHI):** sum of squared current holding weights.
 
-The risk engine uses the **current holdings** and approximately one year of historical market returns. It does not model the user's actual past account history.
+The engine combines historical daily stock returns using **today's market-value weights**. It estimates how today's allocation would have behaved under past daily movements. It is not the user's actual past account performance. The market-fall outputs are scenarios, not forecasts. Risk figures depend on data coverage and the chosen historical window.
 
 ## 3. Moving-average backtest
 
@@ -30,9 +34,9 @@ The strategy compares a **20-day Simple Moving Average** with a **50-day Simple 
 
 **Input:** Historical stock prices transformed into returns, momentum, moving-average gaps, RSI and recent volatility.
 
-**Output:** A binary class: whether the next session's close goes UP or DOWN, not the exact future price.
+**Output:** An experimental binary class: UP if the next session closes higher, otherwise NOT_UP. It does not predict an exact price or expose an uncalibrated probability.
 
-**Logistic Regression:** A simple model for estimating the probability of one of two classes.
+**Logistic Regression:** A linear classification model that estimates class scores; TradeFlow displays only its UP / NOT_UP class, not a probability.
 
 **Random Forest:** Multiple decision trees whose predictions are combined.
 
