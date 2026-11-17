@@ -1,8 +1,9 @@
 """Portfolio risk from real historical returns.
 
-The user's own account history is NOT needed. Risk is estimated by replaying the user's CURRENT holdings
-(today's quantities and weights) through the last year of actual market prices of those same stocks.
-That answers: "how would the portfolio I hold today have behaved over the past year?"
+The user's own account history is NOT needed. Risk is estimated by replaying the user's CURRENT share
+quantities through the last year of actual market prices of those same stocks. Share quantities stay
+fixed while each stock's portfolio weight changes as its historical price changes. This answers:
+"how would the shares I hold today have behaved over the past year?"
 """
 from __future__ import annotations
 
@@ -112,7 +113,13 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
     if len(returns) < 200:
         warnings.append(f"Only {len(returns)} overlapping daily returns were available (about a year is ideal). Treat the figures as rough.")
 
-    w = np.array([rows[s]["value"] / covered_value for s in covered])  # re-normalised over covered holdings
+    w = np.array([rows[s]["value"] / covered_value for s in covered])  # today's weights, used for current risk attribution
+    # Replay today's share quantities through each historical closing price.
+    # Portfolio weights change naturally as each stock's historical price moves.
+    fixed_quantities = pd.Series({s: rows[s]["qty"] for s in covered}, dtype=float)
+    historical_portfolio_values = prices[covered].mul(fixed_quantities, axis=1).sum(axis=1)
+    port_returns = historical_portfolio_values.pct_change().dropna()
+
     cov = returns.cov().to_numpy() * TRADING_DAYS
     sigma = np.sqrt(np.diag(cov))
     port_var = float(w @ cov @ w)
@@ -121,7 +128,7 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
     risk_contrib = (w * marginal / port_var) if port_var > 0 else np.zeros_like(w)  # sums to 1
     diversification_ratio = float((w @ sigma) / port_vol) if port_vol > 0 else 1.0
 
-    port_returns = pd.Series(returns.to_numpy() @ w, index=returns.index)
+    historical_port_vol = float(port_returns.std(ddof=1) * np.sqrt(TRADING_DAYS))
     max_dd, dd_date = _drawdown(port_returns)
     q05 = float(np.quantile(port_returns, 0.05))
     var95 = -q05
@@ -154,8 +161,15 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
     else:
         warnings.append("NIFTY 50 history was unavailable. Actual beta cannot be calculated; the market-fall tester will use the clearly labelled equal-fall scenario instead.")
     port_beta = None
-    if all(b is not None for b in betas.values()):
-        port_beta = float(sum(w[i] * betas[s] for i, s in enumerate(covered)))
+    if payload.benchmark:
+        portfolio_benchmark = pd.concat(
+            [port_returns.rename("__portfolio__"), bench.rename("__bench__")], axis=1
+        ).dropna()
+        if len(portfolio_benchmark) >= MIN_OBSERVATIONS and portfolio_benchmark["__bench__"].var() > 0:
+            port_beta = float(
+                portfolio_benchmark["__portfolio__"].cov(portfolio_benchmark["__bench__"])
+                / portfolio_benchmark["__bench__"].var()
+            )
 
     # ---- per-holding table ------------------------------------------------------------------------
     holdings = []
@@ -236,6 +250,20 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
     worst_day_date = port_returns.idxmin()
     five_day = (1 + port_returns).rolling(5).apply(np.prod, raw=True) - 1
     five_day = five_day.dropna()
+    worst_day_position = historical_portfolio_values.index.get_loc(worst_day_date)
+    worst_day_change = (
+        float(historical_portfolio_values.iloc[worst_day_position] - historical_portfolio_values.iloc[worst_day_position - 1])
+        if worst_day_position > 0 else 0.0
+    )
+    worst_five_day_date = five_day.idxmin() if len(five_day) else None
+    worst_five_day_position = (
+        historical_portfolio_values.index.get_loc(worst_five_day_date)
+        if worst_five_day_date is not None else None
+    )
+    worst_five_day_change = (
+        float(historical_portfolio_values.iloc[worst_five_day_position] - historical_portfolio_values.iloc[worst_five_day_position - 5])
+        if worst_five_day_position is not None and worst_five_day_position >= 5 else None
+    )
     stress = {
         "marketShockPct": shock,
         "uniform": {
@@ -257,42 +285,19 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
             "betaAssumedForOneOf": assumed,
         },
         "historicalWorst": {
-            "description": "Replays the worst days this portfolio's current mix actually experienced in the data window.",
+            "description": "Replays the fixed number of shares you hold today against historical closing prices. This is not your actual past account history.",
             "worstDay": {
                 "date": pd.Timestamp(worst_day_date).strftime("%Y-%m-%d"),
                 "returnPct": _r2(port_returns.min() * 100),
-                "estimatedValueChange": _r2(covered_value * float(port_returns.min())),
+                "estimatedValueChange": _r2(worst_day_change),
             },
             "worstFiveDays": {
-                "endDate": pd.Timestamp(five_day.idxmin()).strftime("%Y-%m-%d") if len(five_day) else None,
+                "endDate": pd.Timestamp(worst_five_day_date).strftime("%Y-%m-%d") if worst_five_day_date is not None else None,
                 "returnPct": _r2(five_day.min() * 100) if len(five_day) else None,
-                "estimatedValueChange": _r2(covered_value * float(five_day.min())) if len(five_day) else None,
+                "estimatedValueChange": _r2(worst_five_day_change) if worst_five_day_change is not None else None,
             },
         },
     }
-
-    # A beginner-friendly portfolio future illustration. Current holdings are
-    # held at fixed weights; cash and future trading decisions are not forecast.
-    # The central path extends the *historical mean* daily return and the band
-    # uses one daily standard deviation multiplied by sqrt(horizon). This band
-    # has no probability guarantee and is NOT an ML prediction.
-    daily_mean = float(port_returns.mean())
-    daily_std = float(port_returns.std(ddof=0))
-    outlook = []
-    for days in (5, 20):
-        scenario_return = (1.0 + daily_mean) ** days - 1.0
-        move_band = daily_std * np.sqrt(days)
-        scenario_value = total_value + covered_value * scenario_return
-        lower_value = max(0.0, scenario_value - covered_value * move_band)
-        upper_value = scenario_value + covered_value * move_band
-        outlook.append({
-            "tradingDays": days,
-            "illustrativeValue": _r2(scenario_value),
-            "lowerIllustration": _r2(lower_value),
-            "upperIllustration": _r2(upper_value),
-            "possibleChange": _r2(scenario_value - total_value),
-            "historyCoveragePct": _r2(coverage * 100),
-        })
 
     return {
         "asOf": returns.index[-1].strftime("%Y-%m-%d"),
@@ -308,7 +313,7 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
             "costValue": _r2(total_cost),
             "unrealizedPnl": _r2(total_value - total_cost),
             "unrealizedPnlPct": _r2((total_value - total_cost) / total_cost * 100) if total_cost else 0.0,
-            "annualizedVolatilityPct": _r2(port_vol * 100),
+            "annualizedVolatilityPct": _r2(historical_port_vol * 100),
             "maxDrawdownPct": _r2(max_dd * 100),
             "maxDrawdownTroughDate": dd_date,
             "windowReturnPct": _r2(window_return * 100),
@@ -329,17 +334,13 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
         "correlation": {"labels": covered, "matrix": [[round(float(v), 2) for v in row] for row in corr.to_numpy()], "highestPairs": top_pairs},
         "flags": flags,
         "stress": stress,
-        "outlook": {
-            "currentHoldingsValue": _r2(total_value),
-            "periods": outlook,
-            "method": "For illustration only: extend the average daily portfolio return from the available past-year overlap for 5/20 trading sessions; use historical volatility times sqrt(days) for an indicative movement band. Keep current stock weights fixed and leave uncovered holdings unchanged.",
-            "warning": "Not a reliable forecast or probability interval. Historical averages can reverse suddenly; cash, future deposits, new trades, brokerage and market impact are not included. May cover less than the full portfolio if data is missing."
-        },
         "warnings": warnings,
         "methodology": (
-            "Today's holdings and weights are replayed through the last year of actual daily closing prices (Yahoo Finance). "
-            "Volatility, correlation, drawdown, VaR and risk contribution are computed from those historical returns with constant weights "
-            "(no rebalancing costs). Risk contribution is each stock's share of portfolio variance. VaR/expected shortfall are historical-simulation "
-            "estimates, not guarantees. Beta is measured against NIFTY 50. All figures are backward-looking and describe the past year only."
+            "Today's share quantities are replayed through the last year of actual daily closing prices (Yahoo Finance); quantities stay fixed "
+            "and portfolio weights change as prices move. Portfolio volatility, drawdown, window return, VaR and expected shortfall use these "
+            "fixed-quantity historical portfolio returns. Correlation and individual stock statistics use each stock's daily returns. Risk contribution "
+            "uses today's portfolio weights and the historical covariance matrix, so it describes current-mix risk attribution. Portfolio beta is measured "
+            "from the fixed-quantity portfolio returns against NIFTY 50. All figures are backward-looking, use the overlapping available price-history "
+            "window, and are not the user's actual past account performance."
         ),
     }
