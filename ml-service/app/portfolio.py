@@ -49,7 +49,7 @@ def _historical_var(returns: pd.Series) -> tuple[float, float]:
     """One-day 95% historical VaR and expected shortfall, expressed as loss percentages."""
     cutoff = float(returns.quantile(0.05))
     tail = returns[returns <= cutoff]
-    return max(0.0, -cutoff * 100), max(0.0, -float(tail.mean()) * 100)
+    return -cutoff * 100, -float(tail.mean()) * 100
 
 def _stress_result(value: float, shock: float) -> dict[str, float]:
     change = value * shock / 100.0
@@ -105,11 +105,10 @@ def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
     weighted_returns = stock_returns[covered].mul(weights, axis=1).sum(axis=1)
     covariance = stock_returns.cov().to_numpy() * TRADING_DAYS
     weight_array = weights.to_numpy()
-    annual_covariance = covariance
-    portfolio_variance = float(weight_array @ annual_covariance @ weight_array)
+    portfolio_variance = float(weight_array @ covariance @ weight_array)
     portfolio_volatility = float(np.sqrt(max(portfolio_variance, 0.0)))
-    individual_volatility = np.sqrt(np.diag(annual_covariance))
-    marginal_risk = annual_covariance @ weight_array
+    individual_volatility = np.sqrt(np.diag(covariance))
+    marginal_risk = covariance @ weight_array
     contributions = (weight_array * marginal_risk / portfolio_variance
                      if portfolio_variance > 0 else np.zeros_like(weight_array))
     diversification_ratio = (float(weight_array @ individual_volatility / portfolio_volatility)
