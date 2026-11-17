@@ -127,11 +127,13 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
     ]
 
     cnn_acc = models[0]["accuracyPct"]
+    cnn_up_prediction_pct = float(np.mean(cnn_pred == 1) * 100)
     best_other = max(m["accuracyPct"] for m in models[1:])
     best_baseline = max(m["accuracyPct"] for m in models[3:])
     verdict = (
         f"On this held-out test period, the CNN scored {cnn_acc:.1f}% accuracy. "
         f"The best alternative scored {best_other:.1f}% and the strongest simple baseline scored {best_baseline:.1f}%. "
+        f"The CNN classified {cnn_up_prediction_pct:.1f}% of test sessions as UP. "
         "This single-stock, single-period comparison is descriptive and does not establish a reliable predictive edge."
     )
 
@@ -156,6 +158,7 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
             "testStart": pd.Timestamp(dates[te_t[0]]).strftime("%Y-%m-%d"), "testEnd": pd.Timestamp(dates[te_t[-1]]).strftime("%Y-%m-%d"),
         },
         "models": models,
+        "cnnUpPredictionPct": round(cnn_up_prediction_pct, 2),
         "architecture": architecture,
         "totalParams": int(model.count_params()),
         "training": {
@@ -203,7 +206,12 @@ def run_live_cnn_prediction(payload: CnnRequest) -> dict[str, Any]:
         callbacks=[tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True)],
     )
     holdout_prob = holdout_model.predict(scale(X_te), verbose=0).ravel()
-    holdout_accuracy = float(np.mean((holdout_prob >= 0.5).astype(int) == y_te) * 100)
+    holdout_predictions = (holdout_prob >= 0.5).astype(int)
+    holdout_accuracy = float(np.mean(holdout_predictions == y_te) * 100)
+    majority_class = int(np.mean(y_tr) >= 0.5)
+    baseline_predictions = np.full(len(y_te), majority_class, dtype=int)
+    baseline_accuracy = float(np.mean(baseline_predictions == y_te) * 100)
+    up_prediction_pct = float(np.mean(holdout_predictions == 1) * 100)
     best_epoch = max(1, int(np.argmin(history.history["val_loss"])) + 1)
 
     # Refit using all labelled windows. The final window has no label and is used only for inference.
@@ -225,5 +233,6 @@ def run_live_cnn_prediction(payload: CnnRequest) -> dict[str, Any]:
         "probabilityUpPct": round(probability_up * 100, 2),
         "evaluationAccuracyPct": round(holdout_accuracy, 2),
         "evaluationLabel": "Chronological held-out test period",
-        "baselineAccuracyPct": round(max(float(np.mean(y_te) * 100), float(np.mean(1 - y_te) * 100)), 2),
+        "baselineAccuracyPct": round(baseline_accuracy, 2),
+        "upPredictionPct": round(up_prediction_pct, 2),
     }
