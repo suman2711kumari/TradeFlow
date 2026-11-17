@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from app.portfolio import PortfolioRiskRequest, build_portfolio_risk
@@ -70,3 +71,33 @@ def test_no_holdings_or_no_history_raises():
         build_portfolio_risk(_request({}, []))
     with pytest.raises(ValueError):
         build_portfolio_risk(_request({}, [{"name": "TCS", "qty": 1, "avg": 1, "price": 1}]))
+
+
+
+def test_portfolio_var_es_and_drawdown_use_current_value_weighted_returns():
+    a, b = make_quotes(300, seed=11), make_quotes(300, seed=12)
+    request = _request(
+        {"TCS": price_points(a), "ITC": price_points(b)},
+        [
+            {"name": "TCS", "qty": 2, "avg": 90, "price": 120},
+            {"name": "ITC", "qty": 1, "avg": 40, "price": 60},
+        ],
+    )
+    result = build_portfolio_risk(request)
+
+    # Today's market values are 240 and 60, so today's allocation is 80% / 20%.
+    prices = pd.DataFrame({
+        "TCS": [row["close"] for row in a],
+        "ITC": [row["close"] for row in b],
+    })
+    daily = prices.pct_change().dropna()
+    portfolio_returns = daily["TCS"] * 0.8 + daily["ITC"] * 0.2
+    cutoff = portfolio_returns.quantile(0.05)
+    expected_var = -cutoff * 100
+    expected_shortfall = -portfolio_returns[portfolio_returns <= cutoff].mean() * 100
+    equity = (1 + portfolio_returns).cumprod()
+    expected_drawdown = (equity / equity.cummax() - 1).min() * 100
+
+    assert result["summary"]["var95OneDayPct"] == pytest.approx(expected_var, abs=0.02)
+    assert result["summary"]["expectedShortfall95Pct"] == pytest.approx(expected_shortfall, abs=0.02)
+    assert result["summary"]["maxDrawdownPct"] == pytest.approx(expected_drawdown, abs=0.02)
