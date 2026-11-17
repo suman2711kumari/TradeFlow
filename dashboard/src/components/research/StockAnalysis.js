@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { STOCKS, formatMoney, getJson, signedPct, riskLevel, GLOSSARY, StatCard, ErrorBox, Spinner, LineChart } from "./shared";
+import { STOCKS, formatMoney, getJson, signedPct, GLOSSARY, StatCard, ErrorBox, Spinner, LineChart } from "./shared";
 
 const TREND_TEXT = {
-  Upward: "The price is above its recent averages, which usually means a short-term uptrend.",
-  Downward: "The price is below its recent averages, which usually means a short-term downtrend.",
+  Upward: "The price is above its recent averages, consistent with a short-term upward trend.",
+  Downward: "The price is below its recent averages, consistent with a short-term downward trend.",
   Mixed: "There is no clear short-term direction right now.",
 };
 
@@ -30,7 +30,6 @@ const StockAnalysis = ({ onOpenAdvanced }) => {
   const latest = result?.latest;
   const code = result?.symbol.replace(".NS", "");
   const name = STOCKS.find(([v]) => v === code)?.[1] || code;
-  const level = latest ? riskLevel(latest.annualizedVolatilityPct) : null;
 
   return (
     <>
@@ -64,11 +63,11 @@ const StockAnalysis = ({ onOpenAdvanced }) => {
           <div className="friendly-heading"><h3>In plain words</h3></div>
           <div className="friendly-stat-grid">
             <StatCard label="Past year" value={signedPct(latest.oneYearReturnPct, 1)} note="Change in price over 12 months" tone={latest.oneYearReturnPct >= 0 ? "up" : "down"} />
-            <StatCard label="Ups & downs" value={level.label} note={`About ${latest.annualizedVolatilityPct.toFixed(0)}% a year`} tone={level.tone} tip={GLOSSARY.volatility} />
+            <StatCard label="Annualized volatility" value={`${latest.annualizedVolatilityPct.toFixed(1)}%`} note="Estimated from recent daily returns" tip={GLOSSARY.volatility} />
             <StatCard label="Biggest recent fall" value={`${Math.abs(latest.maxDrawdownPct).toFixed(1)}%`} note="High to low, last ~4 months" tone="down" tip={GLOSSARY.drawdown} />
           </div>
           <p className="friendly-note">
-            {name} has had <b>{level.label.toLowerCase()}</b> ups and downs ({level.note}). {TREND_TEXT[latest.trend]}{" "}
+            {name} has had annualized volatility of <b>{latest.annualizedVolatilityPct.toFixed(1)}%</b> based on recent daily returns. {TREND_TEXT[latest.trend]}{" "}
             Past performance does not tell you what will happen next, so use this as background, not as a reason to buy or sell.
           </p>
         </section>
