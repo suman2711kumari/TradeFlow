@@ -9,15 +9,15 @@ export default function PortfolioRisk(){
  const haveBeta=Boolean(st?.betaAdjusted?.available);
  const change=st&&(haveBeta?st.betaAdjusted.estimatedValueChange:st.uniform.estimatedValueChange);
  return <>
- <section className="friendly-card"><div className="friendly-heading"><h3>How is my portfolio doing?</h3><p>Your stocks' current estimated value, followed by a historical replay of the shares you hold today. Share quantities stay fixed while portfolio weights change as prices move.</p></div>
+ <section className="friendly-card"><div className="friendly-heading"><h3>How is my portfolio doing?</h3><p>Your current holdings, with risk estimates based on each stock's historical price movements and today's portfolio mix.</p></div>
  <button className="research-run-btn" onClick={()=>load(fall)} disabled={loading} type="button">{loading?"Checking...":"Refresh my portfolio"}</button>
  </section>
  {loading&&!data&&<p className="research-loading"><Spinner/> Loading portfolio history...</p>}
  {error&&<ErrorBox message={error.message} title="Could not check your portfolio" onRetry={()=>load(fall)}/>}
  {data&&<>
  <section className="friendly-card"><div className="friendly-heading"><h3>Your investments today</h3></div>
- <div className="friendly-stat-grid"><StatCard label="Value of the stocks you hold" value={inr(s.marketValue)}/><StatCard label="Profit/loss on your current shares" value={inr(s.unrealizedPnl)} tone={s.unrealizedPnl>=0?"up":"down"}/><StatCard label="Biggest historical drop" value={Math.abs(s.maxDrawdownPct).toFixed(1)+"%"} tip={GLOSSARY.drawdown}/></div>
- <p className="friendly-note">Volatility: <b>{s.annualizedVolatilityPct.toFixed(1)}%</b> (how widely your portfolio's past returns moved). Beta against NIFTY 50: <b>{s.beta??"unavailable"}</b> (how its returns have moved relative to the market). These numbers describe the past, not your future profit.</p>
+ <div className="friendly-stat-grid"><StatCard label="Value of the stocks you hold" value={inr(s.marketValue)}/><StatCard label="Profit/loss on your current shares" value={inr(s.unrealizedPnl)} tone={s.unrealizedPnl>=0?"up":"down"}/><StatCard label="Estimated annualized volatility" value={s.annualizedVolatilityPct.toFixed(1)+"%"}/></div>
+ <p className="friendly-note">Volatility estimates how widely your holdings may fluctuate, using historical stock movements and today's portfolio weights. Beta against NIFTY 50: <b>{s.beta??"unavailable"}</b> (how the current mix's estimated risk relates to market movements). These are historical-data-based estimates, not predictions of future profit.</p>
  {s.beta == null && <div className="rule-explainer"><b>Why is beta unavailable?</b> NIFTY 50 historical market data is missing or did not overlap enough with your stocks' data. We do not replace an unknown beta with 1. The market-fall test will use the simpler equal-fall assumption. Check the data warnings below.</div>}
  </section>
  <section className="friendly-card"><div className="friendly-heading"><h3>What if the overall market falls?</h3><p>Pick a hypothetical fall to explore its possible effect. This does not predict that a fall will happen.</p></div>
