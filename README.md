@@ -73,7 +73,7 @@ To run the optional CNN experiment, install `pip install -r requirements-cnn.txt
 - It **does not** place real exchange orders, handle live matching or charge real brokerage fees.
 - Yahoo prices are external and can be **delayed**. Instant simulated fill is an educational shortcut. No market-hours check or partial fills.
 - No guaranteed profit, price forecasts, model superiority or personalized investment advice.
-- Historical risk represents **today's holdings replayed on past prices**, not the user's historical account evolution.
+- Portfolio risk combines historical daily stock returns using **today's market-value weights**. Drawdown, VaR and expected shortfall describe a hypothetical current allocation under past market movements, not the user's actual historical account evolution.
 - Without MongoDB replica-set transactions, multi-document order consistency is **not guaranteed**.
 - The ML signal simulation is simplified and is not proof of a deployable trading strategy.
 
