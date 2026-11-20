@@ -62,7 +62,7 @@ Open **http://localhost:3001** (landing) or **http://localhost:3000** (dashboard
 The development OTP appears in the backend terminal; SMS delivery is **not implemented**.
 To run the optional CNN experiment, install `pip install -r requirements-cnn.txt` inside the Python environment and restart FastAPI.
 
-## Three resume bullets this branch demonstrates
+## Three concise points about my app
 
 - Built a MERN paper-trading app with server-side market-price fetching and conditional balance updates for stock purchases.
 - Developed a Python risk engine covering volatility, beta and drawdown, plus a moving-average backtester.
