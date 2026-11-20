@@ -5,8 +5,8 @@ FastAPI service. It never downloads data itself: the Node backend fetches candle
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | Status and whether TensorFlow (CNN) is available |
-| `POST /analyze` | Features, expanding-window walk-forward validation (Logistic Regression, Random Forest, naive baselines), edge assessment, cost-aware signal backtest |
-| `POST /portfolio-risk` | Volatility, drawdown, VaR/ES, correlation, beta, risk contribution, concentration, 3 stress tests |
+| `POST /analyze` | Historical features, expanding-window walk-forward evaluation (Logistic Regression, Random Forest and naive baselines), plus an experimental next-session UP / NOT_UP classification |
+| `POST /portfolio-risk` | Current-weight portfolio volatility, beta, maximum drawdown, historical VaR/ES, correlation, diversification, risk contribution, concentration and market-fall scenarios |
 | `POST /backtest` | Moving-average crossover vs buy-and-hold with transaction costs |
 | `POST /cnn-compare` | 1D CNN vs classical models on identical chronological test rows (needs `requirements-cnn.txt`) |
 

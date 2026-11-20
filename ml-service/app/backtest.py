@@ -90,7 +90,8 @@ def run_backtest(payload: BacktestRequest) -> dict[str, Any]:
     position, turnover, net = _simulate(ret, signal, cost)
     _, _, net_gross = _simulate(ret, signal, 0.0)
     bench_net = ret.copy()
-    bench_net.iloc[0] -= cost  # buy-and-hold pays one entry cost
+
+    bench_net.iloc[0] = -cost
 
     initial = payload.initialCapital
     strat = _metrics(net, initial)

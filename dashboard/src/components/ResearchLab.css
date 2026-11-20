@@ -256,3 +256,9 @@
   .compare-grid { grid-template-columns:1fr; }
   .stock-price { align-items:flex-start; }
 }
+/* User-focused outlook blocks */
+.outlook-range {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}
+.outlook-range > div {padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-soft);display:flex;flex-direction:column;gap:6px}
+.outlook-range span {font-size:12px;color:var(--muted-strong)}
+.outlook-range strong {font-size:19px;color:var(--text)}
+@media(max-width:650px){.outlook-range{grid-template-columns:1fr}}

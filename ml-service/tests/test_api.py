@@ -13,6 +13,13 @@ def test_health():
 def test_analyze_endpoint_and_validation_errors():
     ok = client.post("/analyze", json={"symbol": "TCS.NS", "quotes": make_quotes(700)})
     assert ok.status_code == 200 and "walkForward" in ok.json()
+    body = ok.json()
+    assert {"logisticRegression", "randomForest", "cnn"} <= set(body["modelOutlooks"])
+    for key in ("logisticRegression", "randomForest"):
+        assert body["modelOutlooks"][key]["available"] is True
+        assert body["modelOutlooks"][key]["direction"] in {"UP", "NOT_UP"}
+        assert 0 <= body["modelOutlooks"][key]["probabilityUpPct"] <= 100
+    assert isinstance(body["modelOutlooks"]["cnn"]["available"], bool)
     bad = client.post("/analyze", json={"symbol": "TCS.NS", "quotes": make_quotes(50)})
     assert bad.status_code == 422
 

@@ -111,11 +111,3 @@ def pct(value: float) -> float:
 
 def money(value: float) -> float:
     return round(float(value), 2)
-
-
-def significance_margin_pct(n: int) -> float:
-    """Two standard errors of an accuracy estimate on n samples (worst case p=0.5), in percentage points.
-
-    A model must beat the best naive baseline by more than this before we call the gap a real edge.
-    """
-    return 2 * float(np.sqrt(0.25 / max(n, 1))) * 100

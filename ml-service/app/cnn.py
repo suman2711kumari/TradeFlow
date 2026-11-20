@@ -15,7 +15,7 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 from .analysis import make_forest, make_logistic, prob_up
-from .common import FEATURES, Candle, build_frame, confusion, safe_metrics, significance_margin_pct
+from .common import FEATURES, Candle, build_frame, confusion, safe_metrics
 
 WINDOW = 30
 WINDOW_FEATURES = ["return_1", "hl_range", "oc_return", "vol_chg", "sma_gap_10", "volatility_10"]
@@ -115,35 +115,30 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
     majority = int(np.mean(y_tr) >= 0.5)
 
     preds = {
-        "1D CNN": (cnn_pred, cnn_prob, "Deep learning experiment"),
-        "Logistic Regression": ((lr_prob >= 0.5).astype(int), lr_prob, "Classical baseline"),
-        "Random Forest": ((rf_prob >= 0.5).astype(int), rf_prob, "Classical comparison"),
-        "Majority class (training data)": (np.full(len(y_te), majority), None, "Naive baseline"),
-        "Always predict up": (np.ones(len(y_te), dtype=int), None, "Naive baseline"),
+        "1D CNN": (cnn_pred, "Deep learning experiment"),
+        "Logistic Regression": ((lr_prob >= 0.5).astype(int), "Classical baseline"),
+        "Random Forest": ((rf_prob >= 0.5).astype(int), "Classical comparison"),
+        "Majority class (training data)": (np.full(len(y_te), majority), "Naive baseline"),
+        "Always predict up": (np.ones(len(y_te), dtype=int), "Naive baseline"),
     }
-    models = [{"model": name, "role": role, **safe_metrics(y_te, p), "confusion": confusion(y_te, p)} for name, (p, _, role) in preds.items()]
+    models = [
+        {"model": name, "role": role, **safe_metrics(y_te, prediction), "confusion": confusion(y_te, prediction)}
+        for name, (prediction, role) in preds.items()
+    ]
 
     cnn_acc = models[0]["accuracyPct"]
+    cnn_up_prediction_pct = float(np.mean(cnn_pred == 1) * 100)
     best_other = max(m["accuracyPct"] for m in models[1:])
     best_baseline = max(m["accuracyPct"] for m in models[3:])
-    margin = significance_margin_pct(len(y_te))
-    if cnn_acc >= best_other + margin:
-        verdict = (f"On this test window the CNN scored {cnn_acc:.1f}% vs {best_other:.1f}% for the best alternative, a gap larger than the noise margin "
-                   f"(about {margin:.1f} points). One window and one stock is still weak evidence; repeat across stocks and periods.")
-    elif cnn_acc <= best_baseline - margin:
-        verdict = f"The CNN ({cnn_acc:.1f}%) did clearly worse than a naive baseline ({best_baseline:.1f}%). That is a typical, honest result for daily price data."
-    else:
-        verdict = (f"The CNN ({cnn_acc:.1f}%) was statistically indistinguishable from the simpler models and baselines ({best_other:.1f}% best); "
-                   f"differences under about {margin:.1f} points are noise for {len(y_te)} test sessions. The extra complexity bought no demonstrated advantage.")
+    verdict = (
+        f"On this held-out test period, the CNN scored {cnn_acc:.1f}% accuracy. "
+        f"The best alternative scored {best_other:.1f}% and the strongest simple baseline scored {best_baseline:.1f}%. "
+        f"The CNN classified {cnn_up_prediction_pct:.1f}% of test sessions as UP. "
+        "This single-stock, single-period comparison is descriptive and does not establish a reliable predictive edge."
+    )
 
     dates = frame["date"].to_numpy()
     te_t = t_idx[te]
-    table = [
-        {"date": pd.Timestamp(dates[t]).strftime("%Y-%m-%d"), "actualUp": int(a), "cnnProbUpPct": round(float(c) * 100, 1),
-         "logisticProbUpPct": round(float(l) * 100, 1), "forestProbUpPct": round(float(r) * 100, 1)}
-        for t, a, c, l, r in list(zip(te_t, y_te, cnn_prob, lr_prob, rf_prob))[-15:]
-    ]
-
     architecture = []
     for layer in model.layers:
         shape = getattr(layer, "output", None)
@@ -163,6 +158,7 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
             "testStart": pd.Timestamp(dates[te_t[0]]).strftime("%Y-%m-%d"), "testEnd": pd.Timestamp(dates[te_t[-1]]).strftime("%Y-%m-%d"),
         },
         "models": models,
+        "cnnUpPredictionPct": round(cnn_up_prediction_pct, 2),
         "architecture": architecture,
         "totalParams": int(model.count_params()),
         "training": {
@@ -170,11 +166,83 @@ def run_cnn_comparison(payload: CnnRequest) -> dict[str, Any]:
             "loss": [round(float(v), 4) for v in hist["loss"]],
             "valLoss": [round(float(v), 4) for v in hist["val_loss"]],
         },
-        "predictions": table,
         "verdict": verdict,
         "notes": [
             "Scaling statistics are computed on training windows only; early stopping uses a separate validation block; the test block is never used for fitting or model selection.",
             "All models are evaluated on the identical chronological test rows. Window features differ from the tabular features, but the labels and test dates match.",
             "A CNN is an experiment here. Daily price direction is very noisy, so a result near 50% is expected.",
         ],
+    }
+
+
+def run_live_cnn_prediction(payload: CnnRequest) -> dict[str, Any]:
+    """Evaluate a CNN on a chronological holdout, then refit on labelled history for the latest session."""
+    tf = _tf()
+    frame = build_frame(payload.quotes, min_rows=300)
+    X, y, _ = build_windows(frame)
+    n = len(X)
+    if n < 250:
+        raise ValueError("Not enough history to build CNN windows. Need roughly 300+ sessions of daily data.")
+
+    i_train, i_val = int(n * 0.6), int(n * 0.8)
+    tr = slice(0, i_train - 1)
+    va = slice(i_train, i_val - 1)
+    te = slice(i_val, n)
+    X_tr, y_tr = X[tr], y[tr]
+    X_va, y_va = X[va], y[va]
+    X_te, y_te = X[te], y[te]
+    if len(y_tr) < 2 or len(y_va) < 2 or len(y_te) < 2 or len(np.unique(y_tr)) < 2:
+        raise ValueError("Not enough balanced chronological samples for the CNN evaluation.")
+
+    # The holdout model sees only the training block; validation selects the epoch.
+    mean = X_tr.reshape(-1, X_tr.shape[-1]).mean(axis=0)
+    std = X_tr.reshape(-1, X_tr.shape[-1]).std(axis=0) + 1e-8
+    scale = lambda values: ((values - mean) / std).astype(np.float32)
+    tf.keras.utils.set_random_seed(SEED)
+    holdout_model = build_model(tf, X.shape[-1])
+    history = holdout_model.fit(
+        scale(X_tr), y_tr, validation_data=(scale(X_va), y_va),
+        epochs=payload.epochs, batch_size=32, verbose=0,
+        callbacks=[tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True)],
+    )
+    holdout_prob = holdout_model.predict(scale(X_te), verbose=0).ravel()
+    holdout_predictions = (holdout_prob >= 0.5).astype(int)
+    holdout_accuracy = float(np.mean(holdout_predictions == y_te) * 100)
+    majority_class = int(np.mean(y_tr) >= 0.5)
+    baseline_predictions = np.full(len(y_te), majority_class, dtype=int)
+    baseline_accuracy = float(np.mean(baseline_predictions == y_te) * 100)
+    up_prediction_pct = float(np.mean(holdout_predictions == 1) * 100)
+    best_epoch = max(1, int(np.argmin(history.history["val_loss"])) + 1)
+
+    # Refit using all labelled windows. The final window has no label and is used only for inference.
+    final_mean = X.reshape(-1, X.shape[-1]).mean(axis=0)
+    final_std = X.reshape(-1, X.shape[-1]).std(axis=0) + 1e-8
+    final_model = build_model(tf, X.shape[-1])
+    tf.keras.utils.set_random_seed(SEED)
+    final_model.fit(
+        ((X - final_mean) / final_std).astype(np.float32), y,
+        epochs=best_epoch, batch_size=32, verbose=0,
+    )
+    latest_features = frame[WINDOW_FEATURES].tail(WINDOW).to_numpy(dtype=np.float32)
+    if latest_features.shape != (WINDOW, len(WINDOW_FEATURES)) or not np.isfinite(latest_features).all():
+        raise ValueError("The latest 30-session feature window is incomplete.")
+    latest_window = ((latest_features - final_mean) / final_std).astype(np.float32)[None, ...]
+    probability_up = float(final_model.predict(latest_window, verbose=0).ravel()[0])
+    majority_class = int(np.mean(y_tr) >= 0.5)
+
+    baseline_predictions = np.full(
+        len(y_te),
+        majority_class,
+        dtype=int
+    )
+
+    baseline_accuracy = np.mean(
+        baseline_predictions == y_te
+    ) * 100
+    return {
+        "direction": "UP" if probability_up >= 0.5 else "NOT_UP",
+        "probabilityUpPct": round(probability_up * 100, 2),
+        "evaluationAccuracyPct": round(holdout_accuracy, 2),
+        "evaluationLabel": "Chronological held-out test period",
+        "baselineAccuracyPct": round(float(baseline_accuracy), 2),
     }

@@ -1,8 +1,8 @@
-"""Portfolio risk from real historical returns.
+"""Portfolio risk estimates for the user's current holdings.
 
-The user's own account history is NOT needed. Risk is estimated by replaying the user's CURRENT holdings
-(today's quantities and weights) through the last year of actual market prices of those same stocks.
-That answers: "how would the portfolio I hold today have behaved over the past year?"
+Daily stock returns are combined using the portfolio's current market-value weights.
+This estimates the risk of today's allocation under historical market movements; it
+does not reconstruct the user's actual historical account performance.
 """
 from __future__ import annotations
 
@@ -14,19 +14,7 @@ from pydantic import BaseModel, Field
 
 from .common import TRADING_DAYS
 
-MIN_OBSERVATIONS = 60  # minimum overlapping daily returns needed for any statistic
-
-SECTORS: dict[str, str] = {
-    "TCS": "IT", "INFY": "IT", "WIPRO": "IT", "KPITTECH": "IT", "QUICKHEAL": "IT",
-    "HDFCBANK": "Banking", "ICICIBANK": "Banking", "SBIN": "Banking", "AXISBANK": "Banking",
-    "BAJFINANCE": "Financial services",
-    "RELIANCE": "Energy & conglomerate", "ONGC": "Energy & conglomerate", "TATAPOWER": "Power",
-    "ITC": "FMCG", "HINDUNILVR": "FMCG",
-    "BHARTIARTL": "Telecom",
-    "M&M": "Auto", "MARUTI": "Auto",
-    "LT": "Infrastructure", "TITAN": "Consumer discretionary",
-}
-
+MIN_OBSERVATIONS = 60
 
 class PortfolioPosition(BaseModel):
     name: str = Field(min_length=1, max_length=40)
@@ -34,11 +22,9 @@ class PortfolioPosition(BaseModel):
     avg: float = Field(gt=0, le=100_000_000)
     price: float = Field(gt=0, le=100_000_000)
 
-
 class PricePoint(BaseModel):
     date: str
     close: float = Field(gt=0)
-
 
 class PortfolioRiskRequest(BaseModel):
     positions: list[PortfolioPosition] = Field(max_length=200)
@@ -46,257 +32,208 @@ class PortfolioRiskRequest(BaseModel):
     benchmark: list[PricePoint] | None = None
     shockPct: float = Field(default=-5.0, ge=-100, le=100)
 
-
 def _to_series(points: list[PricePoint]) -> pd.Series:
     if not points:
         return pd.Series(dtype=float)
     idx = pd.to_datetime([p.date for p in points], utc=True, errors="coerce").tz_localize(None).normalize()
-    series = pd.Series([p.close for p in points], index=idx, dtype=float)
-    series = series[~series.index.isna()]
-    series = series[~series.index.duplicated(keep="last")].sort_index()
-    return series
+    values = pd.Series([p.close for p in points], index=idx, dtype=float)
+    values = values[~values.index.isna()]
+    return values[~values.index.duplicated(keep="last")].sort_index()
 
+def _max_drawdown(returns: pd.Series) -> float:
+    wealth = (1.0 + returns).cumprod()
+    drawdown = wealth / wealth.cummax() - 1.0
+    return float(drawdown.min()) if not drawdown.empty else 0.0
 
-def _drawdown(returns: pd.Series) -> tuple[float, str | None]:
-    equity = (1 + returns).cumprod()
-    dd = equity / equity.cummax() - 1
-    if dd.empty:
-        return 0.0, None
-    return float(dd.min()), pd.Timestamp(dd.idxmin()).strftime("%Y-%m-%d")
+def _historical_var(returns: pd.Series) -> tuple[float, float]:
+    """One-day 95% historical VaR and expected shortfall, expressed as loss percentages."""
+    cutoff = float(returns.quantile(0.05))
+    tail = returns[returns <= cutoff]
+    return -cutoff * 100, -float(tail.mean()) * 100
 
-
-def _r2(x: float) -> float:
-    return round(float(x), 2)
-
+def _stress_result(value: float, shock: float) -> dict[str, float]:
+    change = value * shock / 100.0
+    return {"shockPct": round(shock, 2), "estimatedValueChange": round(change, 2),
+            "estimatedRemainingValue": round(max(0.0, value + change), 2)}
 
 def build_portfolio_risk(payload: PortfolioRiskRequest) -> dict[str, Any]:
-    positions = payload.positions
-    if not positions:
+    if not payload.positions:
         raise ValueError("No holdings were supplied. Make a paper trade first.")
 
-    warnings: list[str] = []
     rows: dict[str, dict[str, float]] = {}
-    for p in positions:
-        sym = p.name.upper()
-        row = rows.setdefault(sym, {"qty": 0.0, "cost": 0.0, "value": 0.0})
-        row["qty"] += p.qty
-        row["cost"] += p.qty * p.avg
-        row["value"] += p.qty * p.price
-    total_value = sum(r["value"] for r in rows.values())
-    total_cost = sum(r["cost"] for r in rows.values())
-    if total_value <= 0:
-        raise ValueError("Portfolio market value must be positive.")
-    weights_all = {s: r["value"] / total_value for s, r in rows.items()}
+    for position in payload.positions:
+        symbol = position.name.upper()
+        row = rows.setdefault(symbol, {"qty": 0.0, "cost": 0.0, "value": 0.0})
+        row["qty"] += position.qty
+        row["cost"] += position.qty * position.avg
+        row["value"] += position.qty * position.price
 
-    # ---- align histories --------------------------------------------------------------------------
-    series: dict[str, pd.Series] = {}
-    for sym in rows:
-        hist = payload.histories.get(sym) or payload.histories.get(sym.lower()) or []
-        s = _to_series(hist)
-        if len(s) >= MIN_OBSERVATIONS + 1:
-            series[sym] = s
+    total_value = sum(row["value"] for row in rows.values())
+    total_cost = sum(row["cost"] for row in rows.values())
+    if total_value <= 0 or total_cost <= 0:
+        raise ValueError("Portfolio market value and cost must be positive.")
+    weights_all = {symbol: row["value"] / total_value for symbol, row in rows.items()}
+
+    warnings: list[str] = []
+    price_series: dict[str, pd.Series] = {}
+    for symbol in rows:
+        points = payload.histories.get(symbol) or payload.histories.get(symbol.lower()) or []
+        series = _to_series(points)
+        if len(series) >= MIN_OBSERVATIONS + 1:
+            price_series[symbol] = series
         else:
-            warnings.append(f"{sym}: only {len(s)} price observations available, so it is excluded from the statistics.")
-    if not series:
+            warnings.append(f"{symbol}: only {len(series)} valid price observations; excluded from risk statistics.")
+
+    if not price_series:
         raise ValueError("Not enough historical price data for any holding to compute risk.")
 
-    prices = pd.concat(series, axis=1, join="inner").dropna()
-    returns = prices.pct_change().dropna()
-    if len(returns) < MIN_OBSERVATIONS:
-        raise ValueError("The holdings share too few overlapping trading days to compute reliable risk statistics.")
-    covered = list(returns.columns)
-    covered_value = sum(rows[s]["value"] for s in covered)
+    prices = pd.concat(price_series, axis=1, join="inner").dropna()
+    stock_returns = prices.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    if len(stock_returns) < MIN_OBSERVATIONS:
+        raise ValueError("Holdings share too few overlapping trading days to estimate portfolio risk.")
+
+    covered = list(stock_returns.columns)
+    covered_value = sum(rows[symbol]["value"] for symbol in covered)
     coverage = covered_value / total_value
     if coverage < 0.999:
-        warnings.append(f"Risk statistics cover {coverage * 100:.1f}% of portfolio value; the remainder lacked usable price history.")
-    if len(returns) < 200:
-        warnings.append(f"Only {len(returns)} overlapping daily returns were available (about a year is ideal). Treat the figures as rough.")
+        warnings.append(f"Risk statistics cover {coverage * 100:.1f}% of portfolio value; the rest lacks sufficient history.")
+    if len(stock_returns) < 200:
+        warnings.append(f"Only {len(stock_returns)} overlapping daily returns are available; estimates may be less stable.")
 
-    w = np.array([rows[s]["value"] / covered_value for s in covered])  # re-normalised over covered holdings
-    cov = returns.cov().to_numpy() * TRADING_DAYS
-    sigma = np.sqrt(np.diag(cov))
-    port_var = float(w @ cov @ w)
-    port_vol = float(np.sqrt(max(port_var, 0.0)))
-    marginal = cov @ w
-    risk_contrib = (w * marginal / port_var) if port_var > 0 else np.zeros_like(w)  # sums to 1
-    diversification_ratio = float((w @ sigma) / port_vol) if port_vol > 0 else 1.0
+    # Renormalise only the holdings with sufficient history. These weights represent today's allocation.
+    weights = pd.Series({symbol: rows[symbol]["value"] / covered_value for symbol in covered})
+    weighted_returns = stock_returns[covered].mul(weights, axis=1).sum(axis=1)
+    covariance = stock_returns.cov().to_numpy() * TRADING_DAYS
+    weight_array = weights.to_numpy()
+    portfolio_variance = float(weight_array @ covariance @ weight_array)
+    portfolio_volatility = float(np.sqrt(max(portfolio_variance, 0.0)))
+    individual_volatility = np.sqrt(np.diag(covariance))
+    marginal_risk = covariance @ weight_array
+    contributions = (weight_array * marginal_risk / portfolio_variance
+                     if portfolio_variance > 0 else np.zeros_like(weight_array))
+    diversification_ratio = (float(weight_array @ individual_volatility / portfolio_volatility)
+                              if portfolio_volatility > 0 else 1.0)
 
-    port_returns = pd.Series(returns.to_numpy() @ w, index=returns.index)
-    max_dd, dd_date = _drawdown(port_returns)
-    q05 = float(np.quantile(port_returns, 0.05))
-    var95 = -q05
-    tail = port_returns[port_returns <= q05]
-    es95 = float(-tail.mean()) if len(tail) else var95
-    window_return = float((1 + port_returns).prod() - 1)
+    correlation = stock_returns[covered].corr().fillna(0.0)
+    pairs = [(covered[i], covered[j], float(correlation.iloc[i, j]))
+             for i in range(len(covered)) for j in range(i + 1, len(covered))]
+    highest_pairs = [{"a": a, "b": b, "correlation": round(value, 2)}
+                     for a, b, value in sorted(pairs, key=lambda item: -item[2])[:3]]
+    average_correlation = float(np.mean([item[2] for item in pairs])) if pairs else None
 
-    # ---- correlations -----------------------------------------------------------------------------
-    corr = returns.corr().fillna(0.0)
-    pairs = []
-    for i in range(len(covered)):
-        for j in range(i + 1, len(covered)):
-            pairs.append((covered[i], covered[j], float(corr.iloc[i, j])))
-    avg_corr = float(np.mean([p[2] for p in pairs])) if pairs else None
-    top_pairs = [{"a": a, "b": b, "correlation": round(c, 2)} for a, b, c in sorted(pairs, key=lambda x: -x[2])[:3]]
-
-    # ---- betas vs benchmark -----------------------------------------------------------------------
-    betas: dict[str, float | None] = {s: None for s in covered}
-    benchmark_note = None
+    # Beta is estimated against the aligned NIFTY 50 return series.
+    betas: dict[str, float | None] = {symbol: None for symbol in covered}
+    benchmark_name = None
     if payload.benchmark:
-        bench = _to_series(payload.benchmark).pct_change().dropna()
-        joined = returns.join(bench.rename("__bench__"), how="inner").dropna()
-        if len(joined) >= MIN_OBSERVATIONS and joined["__bench__"].var() > 0:
-            var_b = float(joined["__bench__"].var())
-            for s in covered:
-                betas[s] = float(joined[s].cov(joined["__bench__"]) / var_b)
-            benchmark_note = "NIFTY 50"
+        benchmark_returns = _to_series(payload.benchmark).pct_change().rename("benchmark")
+        aligned = stock_returns[covered].join(benchmark_returns, how="inner").dropna()
+        benchmark_variance = float(aligned["benchmark"].var()) if len(aligned) else 0.0
+        if len(aligned) >= MIN_OBSERVATIONS and benchmark_variance > 0:
+            for symbol in covered:
+                betas[symbol] = float(aligned[symbol].cov(aligned["benchmark"]) / benchmark_variance)
+            benchmark_name = "NIFTY 50"
         else:
-            warnings.append("Benchmark history overlapped too little with the holdings; betas are unavailable.")
+            warnings.append("NIFTY 50 history did not overlap enough with the holdings; beta is unavailable.")
     else:
-        warnings.append("Benchmark (NIFTY 50) history was unavailable; betas are unavailable and the beta-adjusted stress test assumes beta = 1.")
-    port_beta = None
-    if all(b is not None for b in betas.values()):
-        port_beta = float(sum(w[i] * betas[s] for i, s in enumerate(covered)))
+        warnings.append("NIFTY 50 history is unavailable; beta-adjusted scenario is not shown.")
 
-    # ---- per-holding table ------------------------------------------------------------------------
+    portfolio_beta = (sum(weights[symbol] * betas[symbol] for symbol in covered)
+                      if all(betas[symbol] is not None for symbol in covered) else None)
+
+    var95, expected_shortfall95 = _historical_var(weighted_returns)
+    max_drawdown = _max_drawdown(weighted_returns)
+    worst_day_return = float(weighted_returns.min())
+    five_day_returns = (1.0 + weighted_returns).rolling(5).apply(np.prod, raw=True) - 1.0
+    worst_five_day_return = float(five_day_returns.min()) if five_day_returns.notna().any() else 0.0
+
     holdings = []
-    for i, s in enumerate(covered):
-        dd_i, _ = _drawdown(returns[s])
+    for index, symbol in enumerate(covered):
+        individual_drawdown = _max_drawdown(stock_returns[symbol])
+        row = rows[symbol]
         holdings.append({
-            "symbol": s,
-            "sector": SECTORS.get(s, "Other"),
-            "quantity": rows[s]["qty"],
-            "marketValue": _r2(rows[s]["value"]),
-            "weightPct": _r2(weights_all[s] * 100),
-            "unrealizedPnl": _r2(rows[s]["value"] - rows[s]["cost"]),
-            "annualizedVolatilityPct": _r2(sigma[i] * 100),
-            "maxDrawdownPct": _r2(dd_i * 100),
-            "beta": None if betas[s] is None else round(betas[s], 2),
-            "riskContributionPct": _r2(risk_contrib[i] * 100),
-            "windowReturnPct": _r2(((1 + returns[s]).prod() - 1) * 100),
+            "symbol": symbol,
+            "quantity": row["qty"],
+            "marketValue": round(row["value"], 2),
+            "weightPct": round(weights_all[symbol] * 100, 2),
+            "unrealizedPnl": round(row["value"] - row["cost"], 2),
+            "annualizedVolatilityPct": round(float(individual_volatility[index]) * 100, 2),
+            "maxDrawdownPct": round(individual_drawdown * 100, 2),
+            "beta": None if betas[symbol] is None else round(betas[symbol], 2),
+            "riskContributionPct": round(float(contributions[index]) * 100, 2),
+            "windowReturnPct": round(((1 + stock_returns[symbol]).prod() - 1) * 100, 2),
         })
-    for s in rows:
-        if s not in covered:
+    for symbol in rows:
+        if symbol not in covered:
+            row = rows[symbol]
             holdings.append({
-                "symbol": s, "sector": SECTORS.get(s, "Other"), "quantity": rows[s]["qty"],
-                "marketValue": _r2(rows[s]["value"]), "weightPct": _r2(weights_all[s] * 100),
-                "unrealizedPnl": _r2(rows[s]["value"] - rows[s]["cost"]),
+                "symbol": symbol, "quantity": row["qty"], "marketValue": round(row["value"], 2),
+                "weightPct": round(weights_all[symbol] * 100, 2),
+                "unrealizedPnl": round(row["value"] - row["cost"], 2),
                 "annualizedVolatilityPct": None, "maxDrawdownPct": None, "beta": None,
                 "riskContributionPct": None, "windowReturnPct": None,
             })
-    holdings.sort(key=lambda h: -h["marketValue"])
+    holdings.sort(key=lambda item: -item["marketValue"])
 
-    # ---- concentration ----------------------------------------------------------------------------
-    hhi = float(sum(v ** 2 for v in weights_all.values()))
-    sector_w: dict[str, float] = {}
-    for s, wt in weights_all.items():
-        sector_w[SECTORS.get(s, "Other")] = sector_w.get(SECTORS.get(s, "Other"), 0.0) + wt
-    sectors = [{"sector": k, "weightPct": _r2(v * 100)} for k, v in sorted(sector_w.items(), key=lambda kv: -kv[1])]
-
-    flags: list[str] = []
-    top = holdings[0]
-    if top["weightPct"] >= 40 and len(rows) > 1:
-        flags.append(f"{top['symbol']} makes up {top['weightPct']:.0f}% of your money. If it falls sharply, your whole portfolio is hit hard.")
-    if len(rows) == 1:
-        flags.append("You own only one stock, so all your money rides on it. Owning several different stocks spreads the risk.")
-    if sectors[0]["weightPct"] >= 50 and len(rows) > 1:
-        flags.append(f"{sectors[0]['weightPct']:.0f}% of your money is in one sector ({sectors[0]['sector']}). Stocks in the same sector often fall together.")
-    if avg_corr is not None and avg_corr >= 0.6:
-        flags.append(f"Your stocks tend to move together (average correlation {avg_corr:.2f}), so owning several of them protects you less than it seems.")
-    for h in holdings:
-        rc = h["riskContributionPct"]
-        if rc is not None and len(rows) > 1 and rc >= 1.5 * h["weightPct"] and rc >= 25:
-            flags.append(f"{h['symbol']} is {h['weightPct']:.0f}% of your money but causes {rc:.0f}% of your portfolio's ups and downs.")
-
-    # ---- stress tests -----------------------------------------------------------------------------
+    hhi = sum(weight ** 2 for weight in weights_all.values())
     shock = float(payload.shockPct)
-    uniform_change = total_value * shock / 100
-    per_holding = []
-    beta_change = 0.0
-    assumed = []
-    for h in holdings:
-        b = betas.get(h["symbol"])
-        if b is None:
-            assumed.append(h["symbol"])
-            b_used = 1.0
-        else:
-            b_used = b
-        move = max(-100.0, b_used * shock)
-        change = h["marketValue"] * move / 100
-        beta_change += change
-        per_holding.append({"symbol": h["symbol"], "betaUsed": round(b_used, 2), "estimatedMovePct": _r2(move), "estimatedValueChange": _r2(change)})
-    worst_day_date = port_returns.idxmin()
-    five_day = (1 + port_returns).rolling(5).apply(np.prod, raw=True) - 1
-    five_day = five_day.dropna()
+    uniform = _stress_result(total_value, shock)
+    beta_available = len(covered) == len(rows) and all(betas[symbol] is not None for symbol in covered)
+    beta_change = (sum(rows[symbol]["value"] * max(-100.0, betas[symbol] * shock) / 100.0
+                       for symbol in covered) if beta_available else None)
+    beta_adjusted = {
+        "available": beta_available,
+        "estimatedValueChange": round(beta_change, 2) if beta_change is not None else None,
+        "estimatedRemainingValue": round(max(0.0, total_value + beta_change), 2) if beta_change is not None else None,
+        "shockPct": round(shock, 2),
+    }
     stress = {
-        "marketShockPct": shock,
-        "uniform": {
-            "description": f"Every holding falls exactly {abs(shock):g}% ({'drop' if shock < 0 else 'rise'}).",
-            "estimatedValueChange": _r2(uniform_change),
-            "estimatedPortfolioValue": _r2(total_value + uniform_change),
-        },
-        "betaAdjusted": {
-            "description": f"The market moves {shock:+g}% and each stock moves by its historical beta times that amount.",
-            "estimatedValueChange": _r2(beta_change),
-            "estimatedPortfolioValue": _r2(total_value + beta_change),
-            "estimatedChangePct": _r2(beta_change / total_value * 100),
-            "perHolding": per_holding,
-            "betaAssumedForOneOf": assumed,
-        },
+        "uniform": uniform,
+        "betaAdjusted": beta_adjusted,
         "historicalWorst": {
-            "description": "Replays the worst days this portfolio's current mix actually experienced in the data window.",
-            "worstDay": {
-                "date": pd.Timestamp(worst_day_date).strftime("%Y-%m-%d"),
-                "returnPct": _r2(port_returns.min() * 100),
-                "estimatedValueChange": _r2(covered_value * float(port_returns.min())),
-            },
-            "worstFiveDays": {
-                "endDate": pd.Timestamp(five_day.idxmin()).strftime("%Y-%m-%d") if len(five_day) else None,
-                "returnPct": _r2(five_day.min() * 100) if len(five_day) else None,
-                "estimatedValueChange": _r2(covered_value * float(five_day.min())) if len(five_day) else None,
-            },
+            "coveragePct": round(coverage * 100, 2),
+            "worstDay": {"returnPct": round(worst_day_return * 100, 2),
+                         "estimatedValueChange": round(covered_value * worst_day_return, 2)},
+            "worstFiveDays": {"returnPct": round(worst_five_day_return * 100, 2),
+                              "estimatedValueChange": round(covered_value * worst_five_day_return, 2)},
         },
     }
 
     return {
-        "asOf": returns.index[-1].strftime("%Y-%m-%d"),
-        "window": {
-            "start": returns.index[0].strftime("%Y-%m-%d"),
-            "end": returns.index[-1].strftime("%Y-%m-%d"),
-            "observations": int(len(returns)),
-            "coveragePct": _r2(coverage * 100),
-        },
+        "asOf": stock_returns.index[-1].strftime("%Y-%m-%d"),
+        "window": {"start": stock_returns.index[0].strftime("%Y-%m-%d"),
+                   "end": stock_returns.index[-1].strftime("%Y-%m-%d"),
+                   "observations": int(len(stock_returns)), "coveragePct": round(coverage * 100, 2)},
         "summary": {
-            "positionsCount": len(rows),
-            "marketValue": _r2(total_value),
-            "costValue": _r2(total_cost),
-            "unrealizedPnl": _r2(total_value - total_cost),
-            "unrealizedPnlPct": _r2((total_value - total_cost) / total_cost * 100) if total_cost else 0.0,
-            "annualizedVolatilityPct": _r2(port_vol * 100),
-            "maxDrawdownPct": _r2(max_dd * 100),
-            "maxDrawdownTroughDate": dd_date,
-            "windowReturnPct": _r2(window_return * 100),
-            "var95OneDayPct": _r2(var95 * 100),
-            "var95OneDayInr": _r2(var95 * covered_value),
-            "expectedShortfall95Pct": _r2(es95 * 100),
-            "beta": None if port_beta is None else round(port_beta, 2),
-            "betaBenchmark": benchmark_note,
+            "positionsCount": len(rows), "marketValue": round(total_value, 2), "costValue": round(total_cost, 2),
+            "unrealizedPnl": round(total_value - total_cost, 2),
+            "unrealizedPnlPct": round((total_value - total_cost) / total_cost * 100, 2),
+            "annualizedVolatilityPct": round(portfolio_volatility * 100, 2),
+            "maxDrawdownPct": round(max_drawdown * 100, 2),
+            "var95OneDayPct": round(var95, 2),
+            "expectedShortfall95Pct": round(expected_shortfall95, 2),
+            "beta": None if portfolio_beta is None else round(portfolio_beta, 2),
+            "betaBenchmark": benchmark_name,
             "diversificationRatio": round(diversification_ratio, 2),
-            "averagePairwiseCorrelation": None if avg_corr is None else round(avg_corr, 2),
-            "effectiveNumberOfStocks": round(1 / hhi, 2),
-            "concentrationIndexPct": _r2(hhi * 100),
-            "largestHolding": top["symbol"],
-            "largestHoldingWeightPct": top["weightPct"],
+            "averagePairwiseCorrelation": None if average_correlation is None else round(average_correlation, 2),
+            "effectiveNumberOfStocks": round(1 / hhi, 2) if hhi > 0 else 0.0,
+            "concentrationIndexPct": round(hhi * 100, 2),
+            "largestHolding": holdings[0]["symbol"],
+            "largestHoldingWeightPct": holdings[0]["weightPct"],
         },
         "holdings": holdings,
-        "sectors": sectors,
-        "correlation": {"labels": covered, "matrix": [[round(float(v), 2) for v in row] for row in corr.to_numpy()], "highestPairs": top_pairs},
-        "flags": flags,
+        "correlation": {"labels": covered,
+                        "matrix": [[round(float(value), 2) for value in row] for row in correlation.to_numpy()],
+                        "highestPairs": highest_pairs},
         "stress": stress,
         "warnings": warnings,
         "methodology": (
-            "Today's holdings and weights are replayed through the last year of actual daily closing prices (Yahoo Finance). "
-            "Volatility, correlation, drawdown, VaR and risk contribution are computed from those historical returns with constant weights "
-            "(no rebalancing costs). Risk contribution is each stock's share of portfolio variance. VaR/expected shortfall are historical-simulation "
-            "estimates, not guarantees. Beta is measured against NIFTY 50. All figures are backward-looking and describe the past year only."
+            "Daily returns for the stocks held today are combined using today's market-value weights. "
+            "Annualized volatility uses the annualized covariance matrix (252 trading days); beta is covariance "
+            "with NIFTY 50 divided by benchmark variance; diversification and risk contributions use the same "
+            "covariance matrix. One-day 95% VaR and expected shortfall use historical simulation on the weighted "
+            "daily return series. Maximum drawdown is calculated from that same hypothetical current-allocation "
+            "return series. This estimates current allocation risk under historical movements; it is not the "
+            "account's actual past performance and does not forecast future returns. The equal-fall and beta-adjusted "
+            "outputs are scenarios, not predictions."
         ),
     }

@@ -13,7 +13,7 @@ function requireSymbol(input) {
 async function analyzeStock(input) {
   const symbol = requireSymbol(input);
   const quotes = await getHistory(symbol, 3);
-  return postToMl("/analyze", { symbol: `${symbol}.NS`, quotes }, 90000);
+  return postToMl("/analyze", { symbol: `${symbol}.NS`, quotes }, 240000);
 }
 
 async function backtestStock(input, params = {}) {
