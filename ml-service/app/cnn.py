@@ -228,11 +228,21 @@ def run_live_cnn_prediction(payload: CnnRequest) -> dict[str, Any]:
         raise ValueError("The latest 30-session feature window is incomplete.")
     latest_window = ((latest_features - final_mean) / final_std).astype(np.float32)[None, ...]
     probability_up = float(final_model.predict(latest_window, verbose=0).ravel()[0])
+    majority_class = int(np.mean(y_tr) >= 0.5)
+
+    baseline_predictions = np.full(
+        len(y_te),
+        majority_class,
+        dtype=int
+    )
+
+    baseline_accuracy = np.mean(
+        baseline_predictions == y_te
+    ) * 100
     return {
         "direction": "UP" if probability_up >= 0.5 else "NOT_UP",
         "probabilityUpPct": round(probability_up * 100, 2),
         "evaluationAccuracyPct": round(holdout_accuracy, 2),
         "evaluationLabel": "Chronological held-out test period",
-        "baselineAccuracyPct": round(baseline_accuracy, 2),
-        "upPredictionPct": round(up_prediction_pct, 2),
+        "baselineAccuracyPct": round(float(baseline_accuracy), 2),
     }

@@ -90,8 +90,7 @@ def run_backtest(payload: BacktestRequest) -> dict[str, Any]:
     position, turnover, net = _simulate(ret, signal, cost)
     _, _, net_gross = _simulate(ret, signal, 0.0)
     bench_net = ret.copy()
-    # Enter buy-and-hold at the first evaluated closing price, matching the strategy start.
-    # No pre-entry close-to-close return is credited to the benchmark.
+
     bench_net.iloc[0] = -cost
 
     initial = payload.initialCapital
